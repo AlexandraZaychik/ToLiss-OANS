@@ -8,7 +8,8 @@ support function below:\
 -- map with taxiline or taxiroute\
 -- ground traffic\
 -- mark item\
---runway approaching advisory\
+-- runway approaching advisory\
+-- current position [option]\
 oans only available when range select is 10NM
 
 just for fun not an accurate simu Of real 320 oans
