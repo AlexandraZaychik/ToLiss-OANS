@@ -1,0 +1,284 @@
+{
+  "source": "A350_BTV_v2.14.3/Resources/plugins/FlyWithLua/Scripts/A350_BTV.lua",
+  "blocks": [
+    {
+      "label": "projection",
+      "first": 239,
+      "last": 262
+    },
+    {
+      "label": "airport parser and runway ends with tower viewpoint",
+      "first": 542,
+      "last": 681,
+      "host_edits": [
+        {
+          "before": "        elseif code == \"1301\" then",
+          "after": "        elseif code == \"14\" then\n            -- Row 14 is a viewpoint, not guaranteed to be a physical tower.\n            -- Use the usual unnamed tower viewpoint or an explicit tower name;\n            -- do not relabel another named viewpoint as a tower.\n            local la, lo, name = line:match(\"^14%s+(%S+)%s+(%S+)%s+%S+%s+%S+%s*(.*)$\")\n            la, lo = tonumber(la), tonumber(lo)\n            local label = (name or \"\"):lower()\n            if la and lo and la == la and lo == lo and math.abs(la) <= 90 and math.abs(lo) <= 180\n                and (label:match(\"^%s*$\") or label:find(\"tower\", 1, true) or label:find(\"%f[%a]twr%f[%A]\") or label:find(\"\u5854\u53f0\", 1, true)) then\n                apt.tower = {lat=la, lon=lo}\n            end\n        elseif code == \"1301\" then"
+        }
+      ]
+    },
+    {
+      "label": "geometry, triangulation, markings, stands, building geometry",
+      "first": 704,
+      "last": 2321,
+      "host_edits": [
+        {
+          "before": "if nm ~= \"\" and not nm:lower():find(\"ramp start\") then",
+          "after": "if nm ~= \"\" then"
+        },
+        {
+          "before": "text = table.concat(names, \"_\"), n = #names",
+          "after": "text = table.concat(names, \"_\"), names = names, n = #names"
+        },
+        {
+          "before": "local LINE_CLASS = { [1] = \"cl\", [7] = \"cl\", [51] = \"cl\", [57] = \"cl\", [60] = \"cl\",\n                     [2] = \"dy\", [8] = \"dy\", [9] = \"dy\", [52] = \"dy\", [58] = \"dy\", [59] = \"dy\",\n                     [20] = \"ws\", [21] = \"ws\", [22] = \"wd\",\n                     [4] = \"hold\", [5] = \"hold\", [6] = \"hold\", [54] = \"hold\", [55] = \"hold\", [56] = \"hold\" }",
+          "after": "-- Wide/black-bordered ILS types intentionally render as their basic yellow path.\nlocal LINE_CLASS = { [1] = \"cl\", [10] = \"cl\", [51] = \"cl\", [60] = \"cl\",\n                     [7] = \"cl\", [11] = \"cl\", [57] = \"cl\", [61] = \"cl\",\n                     [2] = \"dy\", [8] = \"dy\", [9] = \"dy\", [52] = \"dy\", [58] = \"dy\", [59] = \"dy\",\n                     [20] = \"ws\", [21] = \"ws\", [22] = \"wd\",\n                     [4] = \"hold\", [5] = \"hold\", [12] = \"hold\", [13] = \"hold\",\n                     [54] = \"hold\", [55] = \"hold\", [62] = \"hold\", [63] = \"hold\",\n                     [6] = \"ils_hold\", [14] = \"ils_hold\", [56] = \"ils_hold\", [64] = \"ils_hold\" }"
+        },
+        {
+          "before": "local G = { pave = {}, pave_m = {}, pave_c = {}, polys = {}, tl = {}, tl_m = {}, tl_c = {}, hold = {}, stands = {}, terms = {},",
+          "after": "local G = { pave = {}, pave_m = {}, pave_c = {}, polys = {}, tl = {}, tl_m = {}, tl_c = {}, hold = {},\n                ils_hold = {}, stands = {}, terms = {},"
+        },
+        {
+          "before": "if nd.lt and LINE_CLASS[nd.lt] == \"cl\" then has_paint = true; break end",
+          "after": "if nd.lt and LINE_CLASS[nd.lt] then has_paint = true; break end"
+        },
+        {
+          "before": "                else\n                    add_chunks(G.hold, rx, ry)\n                end",
+          "after": "                elseif cur == \"ils_hold\" then\n                    add_chunks(G.ils_hold, rx, ry)\n                else\n                    add_chunks(G.hold, rx, ry)\n                end"
+        },
+        {
+          "before": "-- Gebaeude aus OpenStreetMap (Terminals cyan, andere Gebaeude blau)",
+          "after": "-- Gebaeudeflaechen aus lokalem Cache (Terminals cyan, andere Gebaeude blau)"
+        },
+        {
+          "before": "-- Laden einmal je Flughafen im Hintergrund (curl, versteckt gestartet), danach aus dem Cache.",
+          "after": "-- Quelle und Provenienz stehen im Cache: OSM-Geometrie oder X-Plane-DSF-Facades."
+        },
+        {
+          "before": "-- Daten (c) OpenStreetMap-Mitwirkende, ODbL.",
+          "after": ""
+        },
+        {
+          "before": "local function osm_build(apt, txt)\n    local G = apt.geo\n    local data = osm_parse(txt)\n    if not data then\n        return nil, \"response not readable\"\n    end",
+          "after": "local function buildings_build(apt, txt)\n    local G = apt.geo\n    local data = osm_parse(txt)\n    if not data then\n        local ok, decoded = pcall(json_decode, txt)\n        if ok and type(decoded) == \"table\" and decoded.schema == \"oans-dsf-buildings-v1\" and type(decoded.buildings) == \"table\" then\n            local elements = {}\n            for i, building in ipairs(decoded.buildings) do\n                local geometry = {}\n                for _, point in ipairs(building.points or {}) do\n                    if type(point) == \"table\" and tonumber(point[1]) and tonumber(point[2]) then\n                        geometry[#geometry + 1] = { lon = tonumber(point[1]), lat = tonumber(point[2]) }\n                    end\n                end\n                local tags = building.kind == \"terminal\" and { aeroway = \"terminal\" } or { building = \"yes\" }\n                elements[#elements + 1] = { id = i, type = \"way\", tags = tags, geometry = geometry }\n            end\n            data = { elements = elements }\n        end\n    end\n    if not data then\n        return nil, \"response not readable\"\n    end"
+        },
+        {
+          "before": "                        local item = { tris = tri_chunks(t), minx = bx0, miny = by0, maxx = bx1, maxy = by1, ntri = #t / 6 }",
+          "after": "                        -- Retain the actual boundaries, before hole bridging, for edge AA.\n                        local contours = { { x = o.x, y = o.y } }\n                        for _, h in ipairs(mine) do contours[#contours + 1] = { x = h.x, y = h.y } end\n                        local item = { tris = tri_chunks(t), contours = contours,\n                            minx = bx0, miny = by0, maxx = bx1, maxy = by1, ntri = #t / 6 }"
+        }
+      ]
+    },
+    {
+      "label": "font definitions and metrics",
+      "first": 4002,
+      "last": 4199
+    },
+    {
+      "label": "palette, draw buffer, clipping, antialiasing, text, ownship",
+      "first": 4242,
+      "last": 4704,
+      "host_edits": [
+        {
+          "before": "runway = 0xFF5E5E5E",
+          "after": "runway = 0xFFC8C8C8"
+        },
+        {
+          "before": "    local v, c, t, i = GLB.v, GLB.c, GLB.t, 2 * n\n    v[i], v[i + 1], v[i + 2], v[i + 3], v[i + 4], v[i + 5] = ax, ay, bx, by, cx, cy\n    local wu, wv = GLB.wu, GLB.wv\n    t[i], t[i + 1], t[i + 2], t[i + 3], t[i + 4], t[i + 5] = wu, wv, wu, wv, wu, wv\n    c[n], c[n + 1], c[n + 2] = col, col, col",
+          "after": "    native_draw_tri(ax, ay, bx, by, cx, cy, col, GLB.wu, GLB.wv)"
+        },
+        {
+          "before": "    local v, c, t, i = GLB.v, GLB.c, GLB.t, 2 * n\n    v[i], v[i + 1], v[i + 2], v[i + 3], v[i + 4], v[i + 5] = ax, ay, bx, ay, bx, by\n    v[i + 6], v[i + 7], v[i + 8], v[i + 9], v[i + 10], v[i + 11] = ax, ay, bx, by, ax, by\n    t[i], t[i + 1], t[i + 2], t[i + 3], t[i + 4], t[i + 5] = u0, v0, u1, v0, u1, v1\n    t[i + 6], t[i + 7], t[i + 8], t[i + 9], t[i + 10], t[i + 11] = u0, v0, u1, v1, u0, v1\n    for k = 0, 5 do c[n + k] = col end",
+          "after": "    native_draw_quad(ax, ay, bx, by, u0, v0, u1, v1, col)"
+        },
+        {
+          "before": "    local v, c, t, i = GLB.v, GLB.c, GLB.t, 2 * n\n    v[i], v[i + 1], v[i + 2], v[i + 3], v[i + 4], v[i + 5] = x1, y1, x2, y2, x3, y3\n    v[i + 6], v[i + 7], v[i + 8], v[i + 9], v[i + 10], v[i + 11] = x1, y1, x3, y3, x4, y4\n    t[i], t[i + 1], t[i + 2], t[i + 3], t[i + 4], t[i + 5] = u0, v0, u1, v0, u1, v1\n    t[i + 6], t[i + 7], t[i + 8], t[i + 9], t[i + 10], t[i + 11] = u0, v0, u1, v1, u0, v1\n    for k = 0, 5 do c[n + k] = col end",
+          "after": "    native_draw_quad4(x1, y1, x2, y2, x3, y3, x4, y4, u0, v0, u1, v1, col)"
+        },
+        {
+          "before": "    local v, c, i = GLB.v, GLB.c, 2 * n\n    local t, wu, wv = GLB.t, GLB.wu, GLB.wv\n    for k = i, i + 35, 2 do t[k], t[k + 1] = wu, wv end\n    -- Kern\n    local p1x, p1y, p2x, p2y = ax + ix, ay + iy, bx + ix, by + iy\n    local p3x, p3y, p4x, p4y = bx - ix, by - iy, ax - ix, ay - iy\n    v[i], v[i + 1], v[i + 2], v[i + 3], v[i + 4], v[i + 5] = p1x, p1y, p2x, p2y, p3x, p3y\n    v[i + 6], v[i + 7], v[i + 8], v[i + 9], v[i + 10], v[i + 11] = p1x, p1y, p3x, p3y, p4x, p4y\n    for k = 0, 5 do c[n + k] = col end\n    -- Rand links (p1-p2 innen, aussen transparent)\n    local q1x, q1y, q2x, q2y = ax + ox, ay + oy, bx + ox, by + oy\n    v[i + 12], v[i + 13], v[i + 14], v[i + 15], v[i + 16], v[i + 17] = p1x, p1y, p2x, p2y, q2x, q2y\n    v[i + 18], v[i + 19], v[i + 20], v[i + 21], v[i + 22], v[i + 23] = p1x, p1y, q2x, q2y, q1x, q1y\n    c[n + 6], c[n + 7], c[n + 8], c[n + 9], c[n + 10], c[n + 11] = col, col, c0, col, c0, c0\n    -- Rand rechts\n    local r1x, r1y, r2x, r2y = ax - ox, ay - oy, bx - ox, by - oy\n    v[i + 24], v[i + 25], v[i + 26], v[i + 27], v[i + 28], v[i + 29] = p4x, p4y, p3x, p3y, r2x, r2y\n    v[i + 30], v[i + 31], v[i + 32], v[i + 33], v[i + 34], v[i + 35] = p4x, p4y, r2x, r2y, r1x, r1y\n    c[n + 12], c[n + 13], c[n + 14], c[n + 15], c[n + 16], c[n + 17] = col, col, c0, col, c0, c0",
+          "after": "    local p1x, p1y, p2x, p2y = ax + ix, ay + iy, bx + ix, by + iy\n    local p3x, p3y, p4x, p4y = bx - ix, by - iy, ax - ix, ay - iy\n    local q1x, q1y, q2x, q2y = ax + ox, ay + oy, bx + ox, by + oy\n    local r1x, r1y, r2x, r2y = ax - ox, ay - oy, bx - ox, by - oy\n    native_draw_line(p1x,p1y,p2x,p2y,p3x,p3y,p4x,p4y,\n                     q1x,q1y,q2x,q2y,r1x,r1y,r2x,r2y,col,c0,GLB.wu,GLB.wv)"
+        },
+        {
+          "before": "DL.H, DL.W, DL.Hh = H, W, Hh",
+          "after": "DL.H, DL.W, DL.Hh, DL.pad = H, W, Hh, 0"
+        },
+        {
+          "before": "local function dl_poly(xs, ys, col)\n    local W, Hh = DL.W, DL.Hh",
+          "after": "local function dl_poly(xs, ys, col)\n    local pad = DL.pad or 0\n    local W, Hh = DL.W+pad, DL.Hh+pad"
+        },
+        {
+          "before": "dl_clip_pass(xs, ys, 1, 0, true)",
+          "after": "dl_clip_pass(xs, ys, 1, -pad, true)"
+        },
+        {
+          "before": "dl_clip_pass(xs, ys, 2, 0, true)",
+          "after": "dl_clip_pass(xs, ys, 2, -pad, true)"
+        },
+        {
+          "before": "    local W, Hh = DL.W, DL.Hh\n    local minx, maxx",
+          "after": "    local pad = DL.pad or 0\n    local W, Hh = DL.W+pad, DL.Hh+pad\n    local minx, maxx"
+        },
+        {
+          "before": "if maxx < 0 or minx > W or maxy < 0 or miny > Hh then return end",
+          "after": "if maxx < -pad or minx > W or maxy < -pad or miny > Hh then return end"
+        },
+        {
+          "before": "if minx >= 0 and maxx <= W and miny >= 0 and maxy <= Hh then",
+          "after": "if minx >= -pad and maxx <= W and miny >= -pad and maxy <= Hh then"
+        },
+        {
+          "before": "    local W, Hh = DL.W, DL.Hh\n    local dx, dy = x2 - x1, y2 - y1",
+          "after": "    local pad = DL.pad or 0\n    local W, Hh = DL.W+pad, DL.Hh+pad\n    local dx, dy = x2 - x1, y2 - y1"
+        },
+        {
+          "before": "if not (x1 >= 0 and x1 <= W and y1 >= 0 and y1 <= Hh and x2 >= 0 and x2 <= W and y2 >= 0 and y2 <= Hh) then",
+          "after": "if not (x1 >= -pad and x1 <= W and y1 >= -pad and y1 <= Hh and x2 >= -pad and x2 <= W and y2 >= -pad and y2 <= Hh) then"
+        },
+        {
+          "before": "dl_lb(-dx, x1, t0, t1)",
+          "after": "dl_lb(-dx, x1+pad, t0, t1)"
+        },
+        {
+          "before": "dl_lb(-dy, y1, t0, t1)",
+          "after": "dl_lb(-dy, y1+pad, t0, t1)"
+        }
+      ]
+    },
+    {
+      "label": "OANS checkbox layout and drawing",
+      "first": 4814,
+      "last": 4858
+    },
+    {
+      "label": "map drawing budget",
+      "first": 5053,
+      "last": 5061
+    },
+    {
+      "label": "projection setup, surfaces, buildings and runways",
+      "first": 5223,
+      "last": 5753,
+      "host_edits": [
+        {
+          "before": "-- Gebaeude: aus OpenStreetMap (Terminals cyan, andere blau) - sonst optional geschaetzte Terminals",
+          "after": "-- Gebaeude: aus dem Cache (Terminals cyan, andere blau) - sonst optional geschaetzte Terminals"
+        },
+        {
+          "before": "if G.osm then",
+          "after": "if G.buildings then"
+        },
+        {
+          "before": "ipairs(G.osm.terms)",
+          "after": "ipairs(G.buildings.terms)"
+        },
+        {
+          "before": "and G.osm.bldg or {}",
+          "after": "and G.buildings.bldg or {}"
+        },
+        {
+          "before": "local function draw_tris(list, col, lim)",
+          "after": "local function draw_tris(list, col, lim, exact)"
+        },
+        {
+          "before": "        for _, c in ipairs(list) do\n            if in_view(c.minx, c.miny, c.maxx, c.maxy) then\n                local t, o = c.t, c.o",
+          "after": "        -- Buildings share exact triangle edges. Expanding every triangle\n        -- produces outward spikes at narrow ears and hard, ragged silhouettes.\n        local ex = exact and 0 or ex\n        for _, c in ipairs(list) do\n            if in_view(c.minx, c.miny, c.maxx, c.maxy) then\n                local t, o = c.t, c.o"
+        },
+        {
+          "before": "    -- Linienzuege: sichtbare Stuecke in Bildschirmpunkte (Mindestabstand), bei Platzmangel staerker ausduennen",
+          "after": "    local function draw_building(b, col, lim)\n        local cost = count_tris(b.tris)\n        for _, ring in ipairs(b.contours or {}) do cost = cost + #ring.x * 8 end\n        if DL.n + cost > lim then return false end\n        if not draw_tris(b.tris, col, lim, true) then return false end\n        -- AA only the outer and courtyard boundaries, never triangle diagonals\n        -- or artificial bridges. Reuse the A350 line AA and viewport clipping.\n        for _, ring in ipairs(b.contours or {}) do\n            local px, py = XY(ring.x[#ring.x], ring.y[#ring.y])\n            for k = 1, #ring.x do\n                local qx, qy = XY(ring.x[k], ring.y[k])\n                DL.line(px, py, qx, qy, col, 0.5)\n                px, py = qx, qy\n            end\n        end\n        return true\n    end\n    -- Linienzuege: sichtbare Stuecke in Bildschirmpunkte (Mindestabstand), bei Platzmangel staerker ausduennen"
+        },
+        {
+          "before": "if in_view(b.minx, b.miny, b.maxx, b.maxy) then draw_tris(b.tris, MC.terminal, lim) end",
+          "after": "if in_view(b.minx, b.miny, b.maxx, b.maxy) then if not draw_building(b, MC.terminal, lim) then break end end"
+        },
+        {
+          "before": "if not draw_tris(b.tris, MC.building, lim) then break end",
+          "after": "if not draw_building(b, MC.building, lim) then break end"
+        },
+        {
+          "before": "            if sc >= 0.25 then stroke({ G.hold }, MC.hold, (sc >= 0.9) and 3 or 2, 1, math.max(0, BULK - DL.n)) end",
+          "after": "            if sc >= 0.18 then stroke({ G.ils_hold }, MC.taxiline, th, md2, math.max(0, BULK - DL.n) * 0.18) end\n            if sc >= 0.25 then stroke({ G.hold }, MC.hold, (sc >= 0.9) and 3 or 2, 1, math.max(0, BULK - DL.n)) end"
+        }
+      ]
+    },
+    {
+      "label": "QFU labels with pointed open frame and larger FMS arrow",
+      "first": 5754,
+      "last": 5806,
+      "host_edits": [
+        {
+          "before": "local cap = TXT.cap",
+          "after": "local cap = 8.0"
+        },
+        {
+          "before": "poly_line(house, col, 0.9)",
+          "after": "-- Pointed white placard, open towards the FMS arrow.\n                    for i = 1, #house-1 do\n                        local a, b = house[i], house[i+1]\n                        DL.line(a[1], a[2], b[1], b[2], col, 0.9)\n                    end"
+        },
+        {
+          "before": "local house = { P(-W2, -H2), P(W2, -H2), P(W2, H2), P(0, H2 + g), P(-W2, H2) }",
+          "after": "local house = { P(-W2, -H2), P(-W2, H2), P(0, H2 + g), P(W2, H2), P(W2, -H2) }"
+        },
+        {
+          "before": "P(0, -H2 - 2.5), P(-4.2, -H2 - 14), P(4.2, -H2 - 14)",
+          "after": "P(0, -H2 - 3), P(-7.2, -H2 - 18), P(7.2, -H2 - 18)"
+        }
+      ]
+    },
+    {
+      "label": "labels and pilot marks with runway label edits and manual mark colours",
+      "first": 5807,
+      "last": 6123,
+      "host_edits": [
+        {
+          "before": "local mp = C.mid[r]",
+          "after": "local mp = MAPX.visible_runway_label(C,r,tw,TXT.small)"
+        },
+        {
+          "before": "if mp and mp[1] > x0 + 15 and mp[1] < x0 + cw - 15 and mp[2] > y0 + 15 and mp[2] < y0 + ch - 15\n                and r.L * sc > tw * 2.5 then",
+          "after": "if mp then"
+        },
+        {
+          "before": "DL.text_rot(cxp, cyp, math.atan2(uy, ux), MC.white, t, TXT.small)",
+          "after": "MAPX.draw_runway_pair(C,cxp,cyp,math.atan2(uy,ux),r)"
+        },
+        {
+          "before": "-- Kreuze (gelb) und Fahnen (magenta) des Piloten",
+          "after": "-- Pilot marks: white crosses and green flags per supplied OANS manual."
+        },
+        {
+          "before": "(pass == 1) and MC.bg or MC.cross",
+          "after": "(pass == 1) and MC.bg or MC.white"
+        },
+        {
+          "before": "DL.line(px, py + 0.5, px, py - 15, MC.mag, 1.4)",
+          "after": "DL.line(px, py + 0.5, px, py - 15, MC.green, 1.4)"
+        },
+        {
+          "before": "DL.tri(px + 0.6, py - 15, px + 10, py - 11.5, px + 0.6, py - 8, MC.mag)",
+          "after": "DL.tri(px + 0.6, py - 15, px + 10, py - 11.5, px + 0.6, py - 8, MC.green)"
+        },
+        {
+          "before": "DL.circlef(px, py, 1.6, MC.mag, 8)",
+          "after": "DL.circlef(px, py, 1.6, MC.green, 8)"
+        }
+      ]
+    },
+    {
+      "label": "ND compass",
+      "first": 6301,
+      "last": 6397
+    },
+    {
+      "label": "font atlas loader",
+      "first": 8355,
+      "last": 8419
+    }
+  ],
+  "host_cleanup": [
+    "Remove retired BTV exit and brake-distance overlays; retain OANS runway labels"
+  ],
+  "adapters": [
+    "src/a350_adapter_prelude.lua",
+    "src/a350_adapter.lua"
+  ]
+}

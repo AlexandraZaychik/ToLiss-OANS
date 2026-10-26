@@ -1,0 +1,23 @@
+/build/
+/dist/
+/output/
+/backups/
+__pycache__/
+*.log
+
+# Downloaded installers and duplicate source archives
+*.zip
+*.rar
+*.tar.gz
+/A320-OANS-Setup-1.0.8_ntpdx/
+/vendor/lua-5.1.5/
+
+# Keep upstream Lua source and licenses; omit unused runtime binaries/audio
+/A350_BTV_v2.14.3/Resources/plugins/zz_A350_BTV_bridge/64/
+/A350_BTV_v2.14.3/Resources/plugins/FlyWithLua/Scripts/A350_BTV_data/sounds/
+
+# Local visual evidence remains on disk, outside source history
+/reports/**/*.png
+/reports/**/*.bmp
+/reports/runtime/runtime-dsf/*.bin
+/reports/runtime/runtime-dsf/cache/

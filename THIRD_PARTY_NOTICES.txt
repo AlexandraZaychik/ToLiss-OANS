@@ -1,0 +1,56 @@
+# Reference and provenance
+
+The primary reference is `A350_BTV_v2.14.3/Resources/plugins/FlyWithLua/Scripts/A350_BTV.lua`,
+copyright (c) 2026 Jason R., MIT. The braking demand equation, PI/feed-forward structure,
+pedal slew rates, 50 m exit lead, planar map projection and projective click mapping informed
+this native C++ implementation. The reference license is retained in LICENSE.
+
+Since 0.4.0, the actual A350 map parser, geometry builder, draw primitives,
+anti-aliasing, clipping, runway/stand/marking layers, labels, compass and font
+renderer are extracted into `assets/a350/map_engine.lua` without rewriting.
+`scripts/extract_a350_map.py` lists upstream source ranges. The handwritten
+host adapters are `src/a350_adapter_prelude.lua` and `src/a350_adapter.lua`.
+The A350 license accompanies the code in `assets/a350/LICENSE.txt`.
+No A350 binary bridge or audio is included.
+
+Lua 5.4.9 is statically linked into the native plugin to execute the original
+map layer in a private state independently of FlyWithLua. Copyright (c)
+1994-2026 Lua.org, PUC-Rio, MIT. Official source: https://www.lua.org/ftp/ .
+The complete notice is shipped as `assets/a350/LUA_LICENSE.txt`.
+The B612 Mono atlas `assets/font_b612_px2.bin` is reused from the MIT A350 BTV
+distribution to preserve its avionics typography. B612 is copyright 2012 The B612
+Project Authors and licensed under SIL OFL 1.1; the complete license is shipped as
+`assets/font_b612_OFL.txt`. The atlas is unmodified. Original Lua atlas rendering
+is used by the map layer; native C++ atlas rendering remains for host controls.
+No ToLiss aircraft model, texture, system binary, license file, or credentials is included.
+The generated profile contains only numeric display bounds, corner coordinates and file fingerprints
+derived locally from the installed aircraft. Aircraft datarefs are checked at runtime.
+
+The Fenix reference's free.url points to Vihaan2012-cmyk/Free-Airport-Mapping-DB.
+Its tools/fenix-oans sources at 0b227a7dfc0192f340ef0f697df78b4fcfd3072f and the
+FlyByWire A380X sources it references were studied for the ND context menu, MAP DATA,
+ARPT SEL, STATUS, mouse interaction and zoom behaviour. Those reference components
+declare GPL-3.0. The C++ controls in src/nd_ui.cpp are a new native implementation of
+these operations, not a translation or inclusion of their TypeScript/HTML components.
+No Fenix/FBW code, binaries, fonts or images are included in the plugin package.
+Research snapshots and their licenses are stored separately under reports/references
+and are excluded from the native build and distribution. The supplied Fenix installer
+was not executed.
+
+This independent experimental plugin is not affiliated with ToLiss, FlightFactor, Fenix or Airbus.
+For flight simulation only.
+
+Optional building caches are OpenStreetMap data, copyright OpenStreetMap
+contributors, ODbL 1.0: https://www.openstreetmap.org/copyright . The original
+A350 `osm_build` transforms them into terminal and building geometry.
+OSM caches are runtime fallbacks after local DSF extraction fails or yields no buildings;
+`tools/fetch_osm_cache.py` also supports explicit prefetching.
+
+Runtime DSF reading uses Laminar Research DSFLib and XChunkyFileUtils (MIT),
+from X-Plane/xptools commit 0137e80cdf03e8bb4cb58edb081f4ddf4a32c042.
+Compressed DSFs use Igor Pavlov's public-domain LZMA SDK 19. Both are linked
+statically; no external DSFTool or Python runtime is required. Source provenance
+and local reader patches are recorded in vendor/xptools/UPSTREAM.md; the full
+notice is shipped as assets/a350/DSFLIB_LICENSE.txt.
+The reader includes the RSA Data Security, Inc. MD5 Message-Digest Algorithm;
+its original notice is included in the same DSFLIB_LICENSE.txt.

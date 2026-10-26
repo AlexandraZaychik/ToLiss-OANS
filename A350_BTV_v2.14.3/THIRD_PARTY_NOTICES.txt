@@ -1,0 +1,30 @@
+Third-party components in this download
+=======================================
+
+1) B612 Mono font
+   Copyright 2012 The B612 Project Authors (https://github.com/polarsys/b612)
+   Licensed under the SIL Open Font License, Version 1.1.
+   Included as a pre-rendered bitmap atlas:
+     Resources/plugins/FlyWithLua/Scripts/A350_BTV_data/font_b612_px2.bin
+   (B612 Mono Bold and Regular, rendered with FreeType; the Regular sizes slightly emboldened.)
+   Full license text: Resources/plugins/FlyWithLua/Scripts/A350_BTV_data/font_b612_OFL.txt
+   PolarSys, PolarSys B612 and B612 are trademarks of The Eclipse Foundation.
+
+2) Synthetic voices (A350_BTV_data/sounds/voice1, voice2, voice3, and rops/keep_max_reverse.wav)
+   Generated with the Kokoro-82M text-to-speech model (https://github.com/hexgrad/kokoro,
+   Apache License 2.0), run with sherpa-onnx (https://github.com/k2-fsa/sherpa-onnx, Apache License 2.0),
+   then filtered to sound like a cockpit speaker.
+
+3) OpenStreetMap data (not included - downloaded at runtime)
+   Building outlines are downloaded from the public Overpass API servers when you visit an airport and
+   cached in A350_BTV_data/osm2_<ICAO>.json.
+   Data (c) OpenStreetMap contributors, available under the Open Database License (ODbL):
+   https://www.openstreetmap.org/copyright
+
+4) X-Plane airport data (not included - read at runtime)
+   Runways, taxiways and exits are read from the apt.dat files of your own X-Plane installation.
+
+Trademarks
+   Airbus and A350 are trademarks of Airbus. FlightFactor is a trademark of its owner. X-Plane is a trademark of
+   Laminar Research. They are used only to describe compatibility. This project is not affiliated with,
+   endorsed by or supported by any of them.
