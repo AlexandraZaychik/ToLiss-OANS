@@ -1,4 +1,4 @@
-// Real driver regression in a hidden, test-owned WGL window. Does not attach to
+// Real driver regression in a test-owned offscreen CGL context or hidden WGL window. Does not attach to
 // X-Plane, capture the user's desktop, or require the test SDK/aircraft plugin.
 #include "../src/gl_state.hpp"
 #include "../src/gl_coords.hpp"
@@ -10,6 +10,29 @@
 namespace {
 int checks=0;
 void check(bool yes,const char* label) {++checks;if(!yes)throw std::runtime_error(label);}
+#ifdef __APPLE__
+struct Context {
+    CGLContextObj gl=nullptr;CGLPixelFormatObj format=nullptr;GLuint fbo=0,color=0,stencil=0;
+    void open() {
+        CGLPixelFormatAttribute attributes[]={kCGLPFAAccelerated,kCGLPFAColorSize,static_cast<CGLPixelFormatAttribute>(24),static_cast<CGLPixelFormatAttribute>(0)};
+        GLint count=0;check(CGLChoosePixelFormat(attributes,&format,&count)==kCGLNoError&&count,"choose CGL pixel format");
+        check(CGLCreateContext(format,nullptr,&gl)==kCGLNoError&&CGLSetCurrentContext(gl)==kCGLNoError,"create real driver context");
+        glGenFramebuffersEXT(1,&fbo);glBindFramebufferEXT(GL_FRAMEBUFFER_EXT,fbo);
+        glGenRenderbuffersEXT(1,&color);glBindRenderbufferEXT(GL_RENDERBUFFER_EXT,color);
+        glRenderbufferStorageEXT(GL_RENDERBUFFER_EXT,GL_RGBA8,64,64);
+        glFramebufferRenderbufferEXT(GL_FRAMEBUFFER_EXT,GL_COLOR_ATTACHMENT0_EXT,GL_RENDERBUFFER_EXT,color);
+        glGenRenderbuffersEXT(1,&stencil);glBindRenderbufferEXT(GL_RENDERBUFFER_EXT,stencil);
+        glRenderbufferStorageEXT(GL_RENDERBUFFER_EXT,GL_STENCIL_INDEX8_EXT,64,64);
+        glFramebufferRenderbufferEXT(GL_FRAMEBUFFER_EXT,GL_STENCIL_ATTACHMENT_EXT,GL_RENDERBUFFER_EXT,stencil);
+        check(glCheckFramebufferStatusEXT(GL_FRAMEBUFFER_EXT)==GL_FRAMEBUFFER_COMPLETE_EXT,"complete offscreen framebuffer");
+        glViewport(0,0,32,32);glMatrixMode(GL_PROJECTION);glLoadIdentity();glOrtho(0,1,0,1,-1,1);glMatrixMode(GL_MODELVIEW);glLoadIdentity();
+    }
+    ~Context() {
+        if(gl) {CGLSetCurrentContext(gl);glDeleteRenderbuffersEXT(1,&stencil);glDeleteRenderbuffersEXT(1,&color);glDeleteFramebuffersEXT(1,&fbo);CGLSetCurrentContext(nullptr);CGLDestroyContext(gl);}
+        if(format)CGLDestroyPixelFormat(format);
+    }
+};
+#else
 struct Context {
     HWND window=nullptr;HDC dc=nullptr;HGLRC gl=nullptr;
     void open() {
@@ -25,6 +48,7 @@ struct Context {
     }
     ~Context() {if(gl) {wglMakeCurrent(nullptr,nullptr);wglDeleteContext(gl);}if(dc)ReleaseDC(window,dc);if(window)DestroyWindow(window);UnregisterClassW(L"ToLissOANS_GLRegression",GetModuleHandleW(nullptr));}
 };
+#endif
 void baseline() {
     glDisable(GL_FOG);glDisable(GL_TEXTURE_2D);glDisable(GL_LIGHTING);glDisable(GL_ALPHA_TEST);
     glEnable(GL_BLEND);glDisable(GL_DEPTH_TEST);glDepthMask(GL_FALSE);
@@ -44,7 +68,9 @@ bool red() {unsigned char rgb[3]={};glFinish();glReadPixels(16,16,1,1,GL_RGB,GL_
 void clear() {glDisable(GL_SCISSOR_TEST);glColorMask(1,1,1,1);glClearColor(0,0,0,0);glClear(GL_COLOR_BUFFER_BIT|GL_STENCIL_BUFFER_BIT);}
 }
 int main() {
+#ifdef _WIN32
     SetErrorMode(SEM_FAILCRITICALERRORS|SEM_NOGPFAULTERRORBOX|SEM_NOOPENFILEERRORBOX);
+#endif
     try {
         Context context;context.open();
         GLuint textures[2];glGenTextures(2,textures);
@@ -144,5 +170,5 @@ int main() {
         check(clipped_text("OANS LONG NAME")==clipped_text("OAN"),"dropdown overflow matches plain prefix without ellipsis pixels");font.release();
         check(glGetError()==GL_NO_ERROR,"no OpenGL errors in guard and scalable font regression");
         std::cout<<"PASS "<<checks<<" real OpenGL pixel/state checks; driver="<<glGetString(GL_VERSION)<<'\n';return 0;
-    } catch(const std::exception& e) {std::cerr<<"FAIL "<<e.what()<<" WindowsError="<<GetLastError()<<'\n';return 1;}
+    } catch(const std::exception& e) {std::cerr<<"FAIL "<<e.what()<<'\n';return 1;}
 }

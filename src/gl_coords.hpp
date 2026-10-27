@@ -1,7 +1,5 @@
 #pragma once
-#include <windows.h>
-#include <GL/gl.h>
-#include <GL/glu.h>
+#include "gl_platform.hpp"
 #include <cmath>
 #include <optional>
 

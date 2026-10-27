@@ -9,16 +9,20 @@ void check(bool ok,const char* reason){if(!ok)throw std::runtime_error(reason);}
 std::string read(const std::filesystem::path& path){std::ifstream f(path);return {std::istreambuf_iterator<char>(f),{}};}
 void nested(){OANS_TRACE_SCOPE();OANS_TRACE("nested marker");}
 int main(int argc,char** argv){
+#ifdef _WIN32
     SetErrorMode(SEM_FAILCRITICALERRORS|SEM_NOGPFAULTERRORBOX);
+#endif
     try {
         check(argc>=2,"expected fresh test directory");
         const auto directory=std::filesystem::u8path(argv[1]);std::filesystem::create_directories(directory);
         check(oans::detail::initialize(directory,"logger-test"),"open log");
+#ifdef _WIN32
         if(argc==3&&std::string(argv[2])=="--fault") {
             OANS_TRACE_SCOPE();OANS_TRACE("before synthetic unhandled access violation");
             ULONG_PTR parameters[2]={0,0x1234};RaiseException(EXCEPTION_ACCESS_VIOLATION,0,2,parameters);
             return 2;
         }
+#endif
         OANS_CONFIG("config marker");
         int side_effect=0;OANS_TRACE(std::to_string(++side_effect));
         check(side_effect==(OANS_DEBUG?1:0),"release must not evaluate trace expressions");

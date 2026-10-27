@@ -11,13 +11,13 @@ class MapTexture {
     using Attach=void(APIENTRY*)(GLenum,GLenum,GLenum,GLuint,GLint);
     using Status=GLenum(APIENTRY*)(GLenum);
     GLuint texture_=0,fbo_=0;
-    HGLRC context_=nullptr;
+    GLContext context_=nullptr;
     std::uint64_t generation_=0;
     bool valid_=false;
 public:
     void invalidate(){valid_=false;}
     void release() {
-        if(context_&&wglGetCurrentContext()==context_) {
+        if(context_&&current_gl_context()==context_) {
             if(texture_)glDeleteTextures(1,&texture_);
             auto del=gl_proc<void(APIENTRY*)(GLsizei,const GLuint*)>("glDeleteFramebuffers");
             if(fbo_&&del)del(1,&fbo_);
@@ -26,8 +26,8 @@ public:
     }
     bool update(const std::vector<A350Vertex>& vertices,GLuint atlas,std::uint64_t generation,
                 void(*allocate)(int*,int)) {
-        if(!wglGetCurrentContext())return false;
-        if(context_!=wglGetCurrentContext())release();
+        if(!current_gl_context())return false;
+        if(context_!=current_gl_context())release();
         if(valid_&&generation_==generation)return true;
         auto bind=gl_proc<Bind>("glBindFramebuffer");
         auto gen=gl_proc<Gen>("glGenFramebuffers");
@@ -49,7 +49,7 @@ public:
             glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
             glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,0x812F);
             glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,0x812F);
-            gen(1,&fbo_);context_=wglGetCurrentContext();
+            gen(1,&fbo_);context_=current_gl_context();
         }
         if(!texture_||!fbo_){glPopAttrib();return false;}
         bind(0x8D40,fbo_);attach(0x8D40,0x8CE0,GL_TEXTURE_2D,texture_,0);

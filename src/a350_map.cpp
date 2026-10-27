@@ -125,7 +125,7 @@ A350Map::A350Map(const std::filesystem::path& assets):p_(std::make_unique<Impl>(
         luaL_requiref(L,lib.first,lib.second,1);lua_pop(L,1);
     }
     // The upstream geometry has a package.config platform check, but no loader.
-    lua_newtable(L);lua_pushliteral(L,"\\\n;\n?\n!\n-\n");lua_setfield(L,-2,"config");lua_setglobal(L,"package");
+    lua_newtable(L);lua_pushliteral(L,LUA_DIRSEP "\n;\n?\n!\n-\n");lua_setfield(L,-2,"config");lua_setglobal(L,"package");
     lua_pushlightuserdata(L,&p);lua_pushcclosure(L,Impl::cancelled,1);lua_setglobal(L,"native_cancelled");
     OANS_TRACE("Lua map_engine load/execute assets="+assets.u8string());
     p.check(luaL_loadfile(L,(assets/"a350/map_engine.lua").u8string().c_str()));p.check(lua_pcall(L,0,0,0));

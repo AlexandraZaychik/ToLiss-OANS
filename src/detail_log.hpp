@@ -14,6 +14,8 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#elif defined(__APPLE__)
+#include <pthread.h>
 #endif
 
 // No simulator APIs here: worker threads and exception reporting may use this.
@@ -109,6 +111,8 @@ inline void write(const char* category,const std::string& message) noexcept {
         unsigned long thread=0;
 #ifdef _WIN32
         thread=GetCurrentThreadId();
+#elif defined(__APPLE__)
+        std::uint64_t identifier=0;pthread_threadid_np(nullptr,&identifier);thread=static_cast<unsigned long>(identifier);
 #endif
         char prefix[192];
         const int n=std::snprintf(prefix,sizeof(prefix),"[%llu +%lldms thread=%lu depth=%u %s] ",++sequence,

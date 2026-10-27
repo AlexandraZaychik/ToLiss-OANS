@@ -319,7 +319,7 @@ DsfExtraction extract_runtime_dsf(const std::filesystem::path& root,const IndexE
     }
     std::filesystem::create_directories(cache_directory);
     result.cache=cache_directory/("dsf_buildings_"+entry.icao+".json");
-    const auto temporary=std::filesystem::path(result.cache.wstring()+L".extracting");
+    auto temporary=result.cache;temporary+=".extracting";
     try {
         std::ofstream out(temporary,std::ios::binary|std::ios::trunc);out.imbue(std::locale::classic());
         if(!out)throw std::runtime_error("cannot create runtime DSF cache");

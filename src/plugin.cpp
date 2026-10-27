@@ -7,10 +7,15 @@
 #include <XPLMMenus.h>
 #include <XPLMPlanes.h>
 #include <XPLMUtilities.h>
+#ifdef _WIN32
 #include <windows.h>
 #include <winhttp.h>
-#include <GL/gl.h>
-#include <GL/glu.h>
+#else
+#include "mac_platform.hpp"
+#include "mac_http.hpp"
+#include <dlfcn.h>
+#endif
+#include "gl_platform.hpp"
 #include "core.hpp"
 #include "about_panel.hpp"
 #include "detail_log.hpp"
@@ -302,6 +307,7 @@ bool has_building_geometry(const A350Map& map) {
     return stats.terminals>0||stats.buildings>0;
 }
 
+#ifdef _WIN32
 struct WinHttpHandle {
     HINTERNET value=nullptr;
     ~WinHttpHandle(){if(value)WinHttpCloseHandle(value);}
@@ -310,6 +316,8 @@ struct WinHttpHandle {
 std::string winhttp_error(const char* operation) {
     return std::string(operation)+" failed (WinHTTP "+std::to_string(GetLastError())+")";
 }
+
+#endif
 
 std::string form_encode(const std::string& input) {
     static constexpr char hex[]="0123456789ABCDEF";
@@ -322,13 +330,15 @@ std::string form_encode(const std::string& input) {
     return output;
 }
 
-std::string post_overpass(const wchar_t* host,const std::string& body) {
+#ifdef _WIN32
+std::string post_overpass(const char* host,const std::string& body) {
+    const std::wstring wide_host(host,host+std::strlen(host));
     WinHttpHandle session{WinHttpOpen(L"ToLissOANS/0.4.35 airport-map",WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
                                       WINHTTP_NO_PROXY_NAME,WINHTTP_NO_PROXY_BYPASS,0)};
     if(!session.value)throw std::runtime_error(winhttp_error("WinHttpOpen"));
     if(!WinHttpSetTimeouts(session.value,10000,10000,20000,45000))
         throw std::runtime_error(winhttp_error("WinHttpSetTimeouts"));
-    WinHttpHandle connection{WinHttpConnect(session.value,host,INTERNET_DEFAULT_HTTPS_PORT,0)};
+    WinHttpHandle connection{WinHttpConnect(session.value,wide_host.c_str(),INTERNET_DEFAULT_HTTPS_PORT,0)};
     if(!connection.value)throw std::runtime_error(winhttp_error("WinHttpConnect"));
     WinHttpHandle request_handle{WinHttpOpenRequest(connection.value,L"POST",L"/api/interpreter",nullptr,
                                                     WINHTTP_NO_REFERER,WINHTTP_DEFAULT_ACCEPT_TYPES,WINHTTP_FLAG_SECURE)};
@@ -362,6 +372,10 @@ std::string post_overpass(const wchar_t* host,const std::string& body) {
     return response;
 }
 
+#else
+std::string post_overpass(const char* host,const std::string& body) {return mac_post_overpass(host,body);}
+#endif
+
 bool has_nonempty_osm_elements(const std::string& json) {
     const auto key=json.find("\"elements\"");if(key==std::string::npos)return false;
     auto at=json.find(':',key+9);if(at==std::string::npos)return false;
@@ -385,13 +399,13 @@ std::shared_ptr<A350Map> download_osm_map(const IndexEntry& entry,const std::fil
         "(rel[\"building\"](area.a);rel[\"aeroway\"=\"terminal\"](area.a);)->.r;"
         ".w out tags geom;.r out body geom;";
     const std::string body="data="+form_encode(query);
-    const auto temporary=std::filesystem::path(cache_file.wstring()+L".download");
+    auto temporary=cache_file;temporary+=".download";
     std::error_code ignored;
     std::filesystem::create_directories(cache_file.parent_path(),ignored);
     if(ignored) {warning="cannot create OSM cache directory: "+ignored.message();return {};}
     std::string errors;
-    constexpr std::array<const wchar_t*,2> endpoints={L"overpass-api.de",L"overpass.private.coffee"};
-    for(const wchar_t* host:endpoints) {
+    constexpr std::array<const char*,2> endpoints={"overpass-api.de","overpass.private.coffee"};
+    for(const char* host:endpoints) {
         if(cancel.load())return {};
         try {
             const auto response=post_overpass(host,body);
@@ -404,8 +418,12 @@ std::shared_ptr<A350Map> download_osm_map(const IndexEntry& entry,const std::fil
             }
             auto map=std::make_shared<A350Map>(assets,entry,temporary,&cancel);
             if(cancel.load()) {std::filesystem::remove(temporary,ignored);return {};}
+#ifdef _WIN32
             if(!MoveFileExW(temporary.c_str(),cache_file.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH))
                 throw std::runtime_error("cannot commit OSM cache (Windows "+std::to_string(GetLastError())+")");
+#else
+            std::filesystem::rename(temporary,cache_file);
+#endif
             return map;
         } catch(const std::exception& e) {
             std::filesystem::remove(temporary,ignored);
@@ -1716,6 +1734,7 @@ void test_key(XPLMWindowID w,char key,XPLMKeyFlags flags,char virtual_key,void*,
     auto& field=advisory_test.field==0?advisory_test.airport_query:advisory_test.runway_query;
     if(flags&xplm_ControlFlag) {
         if(virtual_key==XPLM_VK_A||key=='a'||key=='A') {advisory_test.replace=true;return;}
+#ifdef _WIN32
         if(virtual_key==XPLM_VK_V&&OpenClipboard(nullptr)) {
             if(auto data=GetClipboardData(CF_UNICODETEXT))if(auto ptr=static_cast<const wchar_t*>(GlobalLock(data))) {
                 if(advisory_test.replace)field.clear();
@@ -1726,6 +1745,16 @@ void test_key(XPLMWindowID w,char key,XPLMKeyFlags flags,char virtual_key,void*,
             }
             CloseClipboard();
         }
+#else
+        if(virtual_key==XPLM_VK_V||key=='v'||key=='V') {
+            if(advisory_test.replace)field.clear();
+            for(unsigned char c:clipboard_text()) {
+                if(field.size()>=(advisory_test.field==0?8u:32u))break;
+                if(c<128&&(std::isalnum(c)||c==' '||c==','||c=='/'||c=='-'))field+=static_cast<char>(std::toupper(c));
+            }
+            advisory_test.replace=false;
+        }
+#endif
         return;
     }
     if(key==8) {if(advisory_test.replace)field.clear();else if(!field.empty())field.pop_back();advisory_test.replace=false;return;}
@@ -1771,15 +1800,15 @@ int test_wheel(XPLMWindowID w,int x,int y,int,int clicks,void*) {
     return 1;
 }
 GLuint about_texture=0;
-HGLRC about_context=nullptr;
+GLContext about_context=nullptr;
 void about_release() {
-    if(about_texture&&wglGetCurrentContext()==about_context)glDeleteTextures(1,&about_texture);
+    if(about_texture&&current_gl_context()==about_context)glDeleteTextures(1,&about_texture);
     about_texture=0;about_context=nullptr;
 }
 void about_draw(XPLMWindowID w,void*) {
     DrawingState drawing_state(graphics,restore_graphics);
     int l,t,r,b;XPLMGetWindowGeometry(w,&l,&t,&r,&b);
-    if(!about_texture||about_context!=wglGetCurrentContext()) {
+    if(!about_texture||about_context!=current_gl_context()) {
         about_texture=0;
         try {
             const auto pixels=raster_about_panel(version);
@@ -1799,7 +1828,7 @@ void about_draw(XPLMWindowID w,void*) {
             glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,0x812F);
             glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,0x812F);
             glPopClientAttrib();if(unpack)bind_buffer(0x88EC,unpack);
-            about_context=wglGetCurrentContext();
+            about_context=current_gl_context();
         } catch(const std::exception& e) {log(e.what());return;}
     }
     XPLMSetGraphicsState(0,1,0,0,1,0,0);XPLMBindTexture2d(about_texture,0);
@@ -2105,12 +2134,20 @@ PLUGIN_API int XPluginStart(char* name,char* signature,char* description) {
     // Resolve our own DLL before calling any XPLM interface, so startup faults
     // in SDK/provider calls can still leave a breadcrumb in detail.log.
     try {
+#ifdef _WIN32
         HMODULE module=nullptr;wchar_t binary[32768]={};
         if(GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
             reinterpret_cast<LPCWSTR>(&XPluginStart),&module)&&GetModuleFileNameW(module,binary,32768)) {
             plugin_dir=std::filesystem::path(binary).parent_path().parent_path();
             if(!detail::initialize(plugin_dir,version))XPLMDebugString("[ToLissOANS] Cannot open detail.log in plugin directory\n");
         }
+#else
+        Dl_info module{};
+        if(dladdr(reinterpret_cast<const void*>(&XPluginStart),&module)&&module.dli_fname) {
+            plugin_dir=std::filesystem::u8path(module.dli_fname).parent_path().parent_path();
+            if(!detail::initialize(plugin_dir,version))XPLMDebugString("[ToLissOANS] Cannot open detail.log in plugin directory\n");
+        }
+#endif
     }catch(...) {XPLMDebugString("[ToLissOANS] Cannot initialize detail.log\n");}
     OANS_TRACE_SCOPE();OANS_TRACE(std::string("XPluginStart build=")+detail::flavor);
     std::strcpy(name,detail::debug?"ToLiss OANS (debug)":"ToLiss OANS (experimental)");std::strcpy(signature,"org.toliss-oans.experimental");

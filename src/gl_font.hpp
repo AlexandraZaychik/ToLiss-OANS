@@ -17,7 +17,7 @@ class AtlasFont {
     std::map<int,Size> sizes_;
     std::vector<unsigned char> alpha_;
     int width_=0,height_=0,id_=0;
-    HGLRC context_=nullptr;
+    GLContext context_=nullptr;
     const Size& pick(double cap) const {
         auto i=sizes_.lower_bound(static_cast<int>(std::round(cap)));
         if(i==sizes_.end())--i;
@@ -43,7 +43,7 @@ public:
     bool ready() const {return !sizes_.empty()&&(!alpha_.empty()||id_);}
     bool upload(void(*allocate)(int*,int),void(*bind)(int,int)) {
         if(id_)return true;
-        if(!ready()||!wglGetCurrentContext())return false;
+        if(!ready()||!current_gl_context())return false;
         GLint unpack=0;glGetIntegerv(0x88EF,&unpack);
         using BindBuffer=void(APIENTRY*)(GLenum,GLuint);auto bind_buffer=gl_proc<BindBuffer>("glBindBuffer");
         if(unpack&&!bind_buffer)return false;
@@ -57,7 +57,7 @@ public:
         glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,0x812F);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,0x812F);
         glPopClientAttrib();if(unpack)bind_buffer(0x88EC,unpack);
-        context_=wglGetCurrentContext();alpha_.clear();alpha_.shrink_to_fit();return id_!=0;
+        context_=current_gl_context();alpha_.clear();alpha_.shrink_to_fit();return id_!=0;
     }
     int texture() const {return id_;}
     double width(const std::string& s,double cap=18) const {if(sizes_.empty())return 0;const auto& z=pick(cap);return s.size()*z.advance*cap/z.cap;}
@@ -78,6 +78,6 @@ public:
         }
         glEnd();glTexEnvi(GL_TEXTURE_ENV,GL_TEXTURE_ENV_MODE,env);return true;
     }
-    void release() {if(id_&&wglGetCurrentContext()==context_){GLuint id=id_;glDeleteTextures(1,&id);}id_=0;context_=nullptr;}
+    void release() {if(id_&&current_gl_context()==context_){GLuint id=id_;glDeleteTextures(1,&id);}id_=0;context_=nullptr;}
 };
 }

@@ -1,5 +1,7 @@
 #pragma once
+#ifdef _WIN32
 #include <windows.h>
+#endif
 #include <string>
 #include <vector>
 #include <stdexcept>
@@ -7,6 +9,9 @@
 namespace oans {
 // Shared by the plugin and offline preview. Top-down BGRA, rendered at 2x.
 constexpr int about_width=560,about_height=460,about_scale=2;
+#ifdef __APPLE__
+std::vector<unsigned char> raster_about_panel(const std::string& version);
+#else
 inline std::vector<unsigned char> raster_about_panel(const std::string& version) {
     const int width=about_width*about_scale,height=about_height*about_scale;
     HDC dc=CreateCompatibleDC(nullptr);
@@ -53,4 +58,5 @@ inline std::vector<unsigned char> raster_about_panel(const std::string& version)
     SelectObject(dc,old_bitmap);DeleteObject(bitmap);DeleteDC(dc);
     return pixels;
 }
+#endif
 }

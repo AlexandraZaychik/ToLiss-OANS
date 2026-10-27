@@ -1,16 +1,7 @@
 #pragma once
-#include <windows.h>
-#include <GL/gl.h>
-#include <cstdint>
-#include <cstring>
+#include "gl_platform.hpp"
 
 namespace oans {
-template<class T>T gl_proc(const char* name) {
-    auto raw=wglGetProcAddress(name);auto address=reinterpret_cast<std::uintptr_t>(raw);
-    if(address<=3||address==static_cast<std::uintptr_t>(-1))return nullptr;
-    T result=nullptr;static_assert(sizeof result==sizeof raw,"Windows GL function pointer size");
-    std::memcpy(&result,&raw,sizeof result);return result;
-}
 // XPLM controls only part of the inherited OpenGL state. In particular, panel
 // drawing may enter with culling, logic operations, stencil or wireframe active.
 // SDK callers supply both baseline and restoration hooks to keep its cache
