@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(ToLissOANS VERSION 0.4.34 LANGUAGES C CXX)
+project(ToLissOANS VERSION 0.4.35 LANGUAGES C CXX)
 option(OANS_DEBUG "Detailed crash investigation logging" OFF)
 add_compile_definitions(OANS_DEBUG=$<BOOL:${OANS_DEBUG}>)
 set(OANS_PACKAGE_NAME "ToLissOANS")

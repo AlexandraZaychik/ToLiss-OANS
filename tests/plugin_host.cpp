@@ -85,10 +85,10 @@ int main(int argc,char** argv) {
             check((text.find("ENTER]")!=std::string::npos)==debug,"only debug logs callback call chains");
             if(debug)check(text.find("Environment X-Plane=120000")!=std::string::npos&&text.find("DataRef bind")!=std::string::npos,"debug records simulator version and SDK binding breadcrumbs");
         }
-        check(resources()==23,"3 windows, 18 OANS command handlers, loop and draw callback registered");
+        check(resources()==24,"4 windows, 18 OANS command handlers, loop and draw callback registered");
         auto menu_count=function<int(*)()>(mock,"MockMenuItems");auto menu_label=function<const char*(*)(int)>(mock,"MockMenuLabel");
         auto menu_click=function<void(*)(int)>(mock,"MockMenuClick");
-        check(menu_count()==7&&std::string(menu_label(0))=="Open Airport Map Window"&&std::string(menu_label(1))=="Test","map window, Test and Setting menu hierarchy registered");
+        check(menu_count()==14&&std::string(menu_label(0))=="Open Airport Map Window"&&std::string(menu_label(1))=="Test","map window, Test and Setting menu hierarchy registered");
         auto menu_checked=function<int(*)(int)>(mock,"MockMenuChecked");
         check(std::string(menu_label(2))=="Setting"&&std::string(menu_label(3))=="Stand name"&&std::string(menu_label(4))=="Simple"&&std::string(menu_label(5))=="Complex","stand name submenu labels");
         check(menu_checked(4)&&!menu_checked(5),"Simple is selected by default");
@@ -223,7 +223,7 @@ int main(int argc,char** argv) {
         // A new position only 22 km away would have retained the previous airport
         // under the old 60 km automatic-selection threshold.
         set("sim/flightmodel/position/latitude",0,30.2);
-        click(550,516);
+        click(560,506);
         check(switch_state(true,true)&&report().find("ND_state side=1 enabled=0")!=std::string::npos,"projected OANS checkbox enables captain only");
         check(report().find("OANS_POSITION ready=1 pending=1 first_open=0 manual=0 airport=NONE requested=\n")!=std::string::npos,
               "first OANS activation clears the preloaded airport before checking the current position");
@@ -264,16 +264,16 @@ int main(int argc,char** argv) {
         check(projection_row()!=near_projection,"real camera translation still updates ND hit map immediately");
         set("sim/graphics/view/acf_matrix",12,.36);project();
         check(cursor(1,0,0)==0,"leaving ND immediately restores OS cursor");
-        const auto fo_button=screen(550,516,1);
+        const auto fo_button=screen(560,506,1);
         pointer(1,1,fo_button.first,fo_button.second,0);pointer(1,3,fo_button.first,fo_button.second,0);
         check(switch_state(true,true)&&report().find("ND_state side=1 enabled=1 blocked=\n")!=std::string::npos,"FO projected checkbox enables its own map independently");
         pointer(1,1,fo_button.first,fo_button.second,0);pointer(1,3,fo_button.first,fo_button.second,0);
         check(switch_state(true,true)&&report().find("ND_state side=1 enabled=0")!=std::string::npos,"unchecking FO leaves captain checkbox enabled");
-        click(550,516);check(switch_state(true,false),"checkbox uncheck restores original map while leaving switch visible");
-        auto button=screen(550,516),outside_button=screen(450,450);
+        click(560,506);check(switch_state(true,false),"checkbox uncheck restores original map while leaving switch visible");
+        auto button=screen(560,506),outside_button=screen(450,450);
         pointer(1,1,button.first,button.second,0);pointer(1,3,outside_button.first,outside_button.second,0);
         check(switch_state(true,false),"releasing outside checkbox cancels toggle");
-        click(550,516);
+        click(560,506);
         for(int range=1;range<=5;++range) {
             set("AirbusFBW/NDrangeCapt",0,range);advance(.1f);project();
             check(switch_state(false,true)&&pointer(1,1,button.first,button.second,0)==0,"non-10 NM hides switch and releases aircraft input even while checked");
@@ -425,12 +425,77 @@ int main(int argc,char** argv) {
         function<void(*)()>(mock,"MockInitFms")();
         auto fms_page=function<const char*(*)()>(mock,"MockFmsPage");
         auto fms_plan=function<void(*)(const char*,const char*)>(mock,"MockFmsPlan");
+        set("AirbusFBW/ECAMFlightPhase",0,1);
+        for(int i=0;i<85;++i)advance(.1f);
+        check(report().find("observed=0")!=std::string::npos&&std::string(fms_page())=="IDENT","phase one suppresses initial automatic MCDU flipping");
+        check(report().find("MCDU_MAJOR mcdu1=DATA mcdu2=DATA")!=std::string::npos,"both major pages initially DATA");
+        cmd("AirbusFBW/MCDU1Init");cmd("AirbusFBW/MCDU1LSK1R");
+        for(int i=0;i<85;++i)advance(.1f);
+        check(std::string(fms_page())=="IDENT"&&report().find("saved_page=A/C STATUS")!=std::string::npos,
+              "MCDU1 trigger restores untouched MCDU2 through DATA and LSK4L");
+        menu_click(12);menu_click(12);
+        set("AirbusFBW/ECAMFlightPhase",0,2);
+        for(int i=0;i<85;++i)advance(.1f);
+        check(std::string(fms_page())=="IDENT"&&report().find("confirmations=1 complete=0")!=std::string::npos,
+              "first automatic capture restores untouched MCDU2 to A/C STATUS");
+        for(int i=0;i<320;++i)advance(.1f);
+        check(std::string(fms_page())=="IDENT"&&report().find("confirmations=2 complete=1")!=std::string::npos,
+              "internal sampling commands never mark MCDU2 as operated");
+        menu_click(12);menu_click(12);
+        set("AirbusFBW/ECAMFlightPhase",0,1);
+        advance(.1f); // Rebind the observers after re-enabling sampling.
+        cmd("AirbusFBW/MCDU2KeyA");cmd("AirbusFBW/MCDU1LSK1R");
+        for(int i=0;i<85;++i)advance(.1f);
+        check(std::string(fms_page())=="DATA"&&report().find("saved_page=DATA")!=std::string::npos,
+              "ordinary MCDU2 key ends untouched restoration without changing its DATA parent");
+        const std::pair<const char*,const char*> major_keys[]={
+            {"DirTo","DIR"},{"Prog","PROG"},{"Perf","PERF"},{"Init","INIT"},{"Data","DATA"},
+            {"Fpln","F-PLN"},{"RadNav","RAD NAV"},{"FuelPred","FUEL PRED"},
+            {"SecFpln","SEC F-PLN"},{"ATC","ATC COMM"},{"Menu","MCDU MENU"},{"Airport","AIR PORT"}};
+        for(int unit:{1,2})for(const auto& item:major_keys) {
+            cmd(("AirbusFBW/MCDU"+std::to_string(unit)+item.first).c_str());
+            const std::string expected=unit==1?std::string("MCDU_MAJOR mcdu1=")+item.second+" mcdu2=DATA":
+                std::string("MCDU_MAJOR mcdu1=AIR PORT mcdu2=")+item.second+"\n";
+            check(report().find(expected)!=std::string::npos,"all major keys update only their own MCDU");
+        }
+        cmd("AirbusFBW/MCDU1Perf");cmd("AirbusFBW/MCDU2Data");
+        cmd("AirbusFBW/MCDU1LSK1L");cmd("AirbusFBW/MCDU2LSK4L");
+        cmd("AirbusFBW/MCDU1SlewRight");cmd("AirbusFBW/MCDU2KeyA");
+        check(report().find("MCDU_MAJOR mcdu1=PERF mcdu2=DATA")!=std::string::npos,"LSK, arrow and character keys preserve major pages");
+        cmd("AirbusFBW/MCDU1Init");cmd("AirbusFBW/MCDU1LSK1R");
+        for(int i=0;i<85;++i)advance(.1f);
+        check(report().find("confirmations=1 complete=1")!=std::string::npos,"one full selected-key capture completes automatic session in phase one");
+        set("AirbusFBW/ECAMFlightPhase",0,2);
+        for(int i=0;i<400;++i)advance(.1f);
+        check(report().find("ecam_phase=1 confirmations=1 complete=1")!=std::string::npos,"crew completion stops phase polling and automatic recapture");
+        cmd("AirbusFBW/MCDU1Perf");
+        // Start a fresh capture
+        // session so the existing automatic-confirmation checks stay isolated.
+        menu_click(12);menu_click(12);
+        set("AirbusFBW/ECAMFlightPhase",0,2);
         for(int i=0;i<85;++i)advance(.1f);
         auto fms_report=report();
         check(fms_report.find("origin=ZUCK departure_runway=02L destination=ZUUU arrival_runway=02L")!=std::string::npos,"actual .xpl reads byte DataRefs and publishes FMS endpoints");
         check(row(0).find("not_in_plan=1")!=std::string::npos,"native selected ZTEST is outside observed ZUCK to ZUUU plan");
-        check(std::string(fms_page())=="IDENT","actual .xpl restores A/C STATUS through verified DATA navigation item");
+        check(std::string(fms_page())=="DATA","actual .xpl restores DATA parent from A/C STATUS subpage");
         check(fms_report.find("alternate=ZALT ")!=std::string::npos,"actual .xpl reads alternate from FUEL PRED");
+        check(fms_report.find("confirmations=1 complete=0")!=std::string::npos,"first automatic capture requires a second airport confirmation");
+        check(fms_report.find("MCDU_MAJOR mcdu1=PERF mcdu2=DATA")!=std::string::npos,"sampler navigation does not overwrite crew major pages");
+        for(int i=0;i<320;++i)advance(.1f);
+        check(report().find("confirmations=2 complete=1")!=std::string::npos,"second matching airport pair stops automatic capture");
+        menu_click(12);menu_click(12);
+        set("AirbusFBW/ECAMFlightPhase",0,5);
+        for(int i=0;i<85;++i)advance(.1f);
+        check(std::string(fms_page())=="DATA"&&report().find("observed=0")!=std::string::npos&&
+              report().find("ecam_phase=5 confirmations=0 complete=0")!=std::string::npos,
+              "phase five blocks automatic detection without latching a successful capture");
+        cmd("AirbusFBW/MCDU1Init");cmd("AirbusFBW/MCDU1LSK1R");
+        for(int i=0;i<49;++i)advance(.1f);
+        check(std::string(fms_page())=="DATA"&&report().find("observed=0")!=std::string::npos,
+              "selected-key capture waits five seconds even when phase five blocks automatic capture");
+        for(int i=0;i<40;++i)advance(.1f);
+        check(report().find("origin=ZUCK departure_runway=02L destination=ZUUU arrival_runway=02L")!=std::string::npos,
+              "phase five still permits selected-key capture");
         auto fms_alternate=function<void(*)(const char*)>(mock,"MockFmsAlternate");
         project();cmd("toliss_oans/capt_airport");click(550,19);
         for(int i=0;i<40;++i) {advance(.1f);Sleep(2);}
@@ -439,27 +504,80 @@ int main(int argc,char** argv) {
         check(row(0).find("panel=2")!=std::string::npos&&row(0).find("airport_modifying=0")!=std::string::npos,"FMS airport shortcut stays on airport page with confirmed selection");
         check(row(0).find("not_in_plan=0")!=std::string::npos,"selected alternate belongs to active plan in actual .xpl");
         fms_alternate("----");for(int i=0;i<330;++i)advance(.1f);
+        check(report().find("alternate=ZALT ")!=std::string::npos,"completed automatic capture does not poll later silent plan changes");
+        cmd("AirbusFBW/MCDU2Fpln");cmd("AirbusFBW/MCDU2LSK6R");for(int i=0;i<85;++i)advance(.1f);
         check(report().find("alternate= saved_page=")!=std::string::npos&&row(0).find("not_in_plan=1")!=std::string::npos,"cleared alternate removes active plan membership");
         fms_alternate("ZALT");
         cmd("toliss_oans/capt_airport");click(220,91);
         for(char c:std::string("ZTEST"))key(c);
         click(398,16);for(int i=0;i<40;++i) {advance(.1f);Sleep(2);}
-        fms_plan("ZUCK","ZUUU");for(int i=0;i<320;++i)advance(.1f);
+        fms_plan("ZUCK","ZUUU");cmd("AirbusFBW/MCDU2Fpln");cmd("AirbusFBW/MCDU2LSK6R");for(int i=0;i<85;++i)advance(.1f);
         check(report().find("origin=ZUCK departure_runway= destination=ZUUU arrival_runway=")!=std::string::npos,"native next sample clears deselected runways");
-        fms_plan("PPOS","");for(int i=0;i<320;++i)advance(.1f);
+        fms_plan("PPOS","");cmd("AirbusFBW/MCDU1Init");cmd("AirbusFBW/MCDU1LSK1R");for(int i=0;i<85;++i)advance(.1f);
         check(report().find("plan_status=NO FLIGHT PLAN origin= departure_runway= destination= arrival_runway=")!=std::string::npos,"native PPOS sample clears old airports");
         fms_plan("ZUCK02L","ZUUU02L");
         cmd("AirbusFBW/MCDU2FuelPred");advance(.1f);
         check(std::string(fms_page())=="FUEL","crew input passes through sampler observer");
-        for(int i=0;i<70;++i)advance(.1f);
-        check(std::string(fms_page())=="FUEL","MCDU sampling defers while crew input is recent");
-        for(int i=0;i<45;++i)advance(.1f);
+        for(int i=0;i<44;++i)advance(.1f);
+        check(std::string(fms_page())=="FUEL"&&report().find("plan_status=NO FLIGHT PLAN")!=std::string::npos,"ordinary page key defers the pending crew retry for five seconds");
+        for(int i=0;i<40;++i)advance(.1f);
+        check(std::string(fms_page())=="FUEL"&&report().find("plan_status=CONNECTED")!=std::string::npos&&
+              session_log().find("trigger detect INIT LSK1R retry 1 success")!=std::string::npos,
+              "failed selected-key capture retries with its original page and key source");
+        fms_alternate("ZBAA");
+        cmd("AirbusFBW/MCDU2LSK6R");for(int i=0;i<70;++i)advance(.1f);
+        check(report().find("alternate=ZALT ")!=std::string::npos,"R6 outside F-PLN does not request sampling after retry success");
+        fms_alternate("ZALT");
+        cmd("AirbusFBW/MCDU1Fpln");cmd("AirbusFBW/MCDU1LSK6R");
+        for(int i=0;i<49;++i)advance(.1f);
+        check(std::string(fms_page())=="FUEL","selected key waits five seconds before navigating MCDU2");
+        for(int i=0;i<40;++i)advance(.1f);
         check(std::string(fms_page())=="FUEL"&&report().find("origin=ZUCK departure_runway=02L destination=ZUUU arrival_runway=02L")!=std::string::npos,"sampling resumes and restores crew-selected FUEL PRED");
+        for(int unit:{1,2}) {
+            const char* alternate=unit==1?"ZBAA":"ZALT";
+            fms_alternate(alternate);
+            cmd(("AirbusFBW/MCDU"+std::to_string(unit)+"Init").c_str());
+            cmd(("AirbusFBW/MCDU"+std::to_string(unit)+"LSK2L").c_str());
+            for(int i=0;i<85;++i)advance(.1f);
+            check(report().find(std::string("alternate=")+alternate+" saved_page=")!=std::string::npos,"INIT L2 on either MCDU refreshes alternate after automatic capture completed");
+        }
+        const std::pair<const char*,const char*> parent_roots[]={
+            {"Data","DATA"},{"DirTo","DIR"},{"Init","INIT"},{"Fpln","FPLN"},
+            {"FuelPred","FUEL"},{"RadNav","RADNAV"},{"Menu","MENU"},{"SecFpln","SEC"},
+            {"Perf","PERF"},{"Prog","PROG"},{"ATC","ATC"},{"Airport","FPLN"}};
+        cmd("AirbusFBW/MCDU1Fpln");
+        for(const auto& parent:parent_roots) {
+            cmd((std::string("AirbusFBW/MCDU2")+parent.first).c_str());
+            function<void(*)()>(mock,"MockFmsSubpage")();
+            cmd("AirbusFBW/MCDU1LSK6R");
+            for(int i=0;i<85;++i)advance(.1f);
+            check(std::string(fms_page())==parent.second&&report().find("status=CONNECTED")!=std::string::npos,
+                  "actual .xpl restores tracked MCDU2 parent from unknown subpage for every major key");
+        }
         check(writes()==0,"FMS page sampling makes zero aircraft DataRef writes");
         menu_click(1);check(focus()==2,"Test menu opens independent input window and keyboard focus");
         int tl,tt,tr,tb;function<void(*)(int,int*,int*,int*,int*)>(mock,"MockWindowRect")(2,&tl,&tt,&tr,&tb);
         auto test_click=[&](int x,int y){pointer(2,1,tl+x,tb+y,0);pointer(2,3,tl+x,tb+y,0);};
         auto type=[&](const std::string& s){for(char c:s)key(c);};
+        check(tt-tb==470,"Test window has space for live OANS offset controls");
+        test_click(490,366);type("-20");key(13);
+        check(report().find("bounds=534,515,598,537 vertical_offset_px=-20")!=std::string::npos,"negative offset moves switch hit bounds up by twenty ND pixels");
+        type("30");key(13);
+        check(report().find("bounds=534,475,598,497 vertical_offset_px=20")!=std::string::npos,"offset input clamps at positive twenty and moves hit bounds down");
+        type("-");key(13);
+        check(report().find("vertical_offset_px=20")!=std::string::npos,"incomplete signed input preserves last valid offset");
+        test_click(180,366);
+        check(report().find("vertical_offset_px=-20")!=std::string::npos,"slider left endpoint selects minus twenty");
+        pointer(2,1,tl+306,tb+366,0);pointer(2,2,tl+600,tb+366,0);pointer(2,3,tl+600,tb+366,0);
+        check(report().find("vertical_offset_px=20")!=std::string::npos,"slider drag beyond right endpoint clamps and releases capture");
+        test_click(490,366);type("7");key(13);
+        check(report().find("bounds=534,488,598,510 vertical_offset_px=7")!=std::string::npos,"input selects an intermediate integer offset");
+        const bool checked_before_offset_click=report().find("OANS_switch side=0 visible=1 checked=1")!=std::string::npos;
+        click(560,499);
+        check(report().find("OANS_switch side=0 visible=1 checked="+std::to_string(!checked_before_offset_click))!=std::string::npos,"shifted switch responds at its new projected click position");
+        click(560,499);
+        test_click(490,316);
+        check(report().find("bounds=534,495,598,517 vertical_offset_px=0")!=std::string::npos,"reset restores the installed baseline layout");
         test_click(250,246);type("ZTEST");key(9);type("9");key(13);
         check(report().find("RWY_AHEAD_TEST active=1 pending=0 steady=1")!=std::string::npos&&report().find("source=TEST")!=std::string::npos,"entered airport and runway enable test while aircraft stopped");
         for(int i=0;i<400;++i)advance(.1f);
@@ -491,9 +609,16 @@ int main(int argc,char** argv) {
         check(report().find("active=0 pending=0")!=std::string::npos&&report().find("source=TEST")==std::string::npos,"stopping pending load cannot reactivate test after worker finishes");
         test_click(250,194);type("09");key(13);test_click(430,96);
         check(writes()==0,"manual test makes zero aircraft DataRef writes");
+        menu_click(12);advance(.1f);
+        check(!menu_checked(12),"disable automatic MCDU2 sampling");
+        cmd("AirbusFBW/MCDU1Init");cmd("AirbusFBW/MCDU2Prog");
+        check(report().find("MCDU_MAJOR mcdu1=INIT mcdu2=PROG")!=std::string::npos,"major tracking works with automatic sampling disabled");
+        menu_click(12);advance(.1f);
+        check(report().find("MCDU_MAJOR mcdu1=INIT mcdu2=PROG")!=std::string::npos,"sampling setting preserves major pages");
         // SDK message 103 positions the user's aircraft at a new airport.
         set("AirbusFBW/CaptMAPAvail",0,0);set("AirbusFBW/CoMAPAvail",0,0);
         message(0,103,nullptr);
+        check(report().find("MCDU_MAJOR mcdu1=INIT mcdu2=PROG")!=std::string::npos,"airport load preserves major pages");
         for(int i=0;i<60;++i) {advance(.1f);Sleep(2);}
         check(report().find("OANS_POSITION ready=0 pending=1 first_open=1 manual=0 airport=NONE requested=\n")!=std::string::npos,
               "new-airport message clears previous manual selection and rejects late map loads while IRS is unavailable");
@@ -512,6 +637,7 @@ int main(int argc,char** argv) {
         set("AirbusFBW/CaptMAPAvail",0,1);set("AirbusFBW/CoMAPAvail",0,1);
         for(int i=0;i<80;++i) {advance(.1f);Sleep(2);}
         message(0,106,nullptr);message(0,102,nullptr);
+        check(report().find("MCDU_MAJOR mcdu1=DATA mcdu2=DATA")!=std::string::npos,"aircraft reload resets both major pages to DATA");
         check(report().find("pending=1 first_open=1 manual=0 airport=NONE requested=\n")!=std::string::npos,
               "user-aircraft unload and reload clear the previous map and rearm first opening");
         for(int i=0;i<80;++i) {advance(.1f);Sleep(2);}

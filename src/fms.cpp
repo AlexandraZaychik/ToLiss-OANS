@@ -4,6 +4,26 @@
 #include <regex>
 
 namespace oans {
+void FmsAutoCapture::update_phase(double now,int phase) {
+    phase_=phase>=1&&phase<=10?phase:0;
+    next_phase_=now+(phase_>=8?60:phase_>=5?30:5);
+}
+bool FmsAutoCapture::request_due(double now,bool usable,bool busy) {
+    if(!capture_allowed()||!usable||busy||now<next_attempt_)return false;
+    next_attempt_=now+30;
+    return true;
+}
+void FmsAutoCapture::observe(const FmsPlan& plan,bool crew_triggered) {
+    if(complete_)return;
+    // Both airports must be present: two identical partial/empty pages must
+    // not stop retries while a datalink plan is still being populated.
+    if(!plan.observed||plan.origin.airport.empty()||plan.destination.airport.empty()) {
+        confirmations_=0;origin_.clear();destination_.clear();return;
+    }
+    if(origin_==plan.origin.airport&&destination_==plan.destination.airport)++confirmations_;
+    else {origin_=plan.origin.airport;destination_=plan.destination.airport;confirmations_=1;}
+    complete_=crew_triggered||confirmations_>=2;
+}
 bool airport_outside_active_plan(const FmsPlan& plan,const std::string& airport) {
     return plan.observed&&!airport.empty()&&
         airport!=plan.origin.airport&&airport!=plan.destination.airport&&airport!=plan.alternate;
@@ -61,10 +81,14 @@ McduPage mcdu_page(const McduScreen& s) {
     if(s.contains("ACTIVE NAV DATA BASE")&&s.contains("SECOND NAV DATA BASE"))return McduPage::ident;
     if(t=="DIR TO")return McduPage::dir;
     if(t=="FUEL PRED")return McduPage::fuel;
-    if(t=="DATA INDEX"&&(st.empty()||st=="1/2"))return McduPage::data;
+    // DATA INDEX is the DATA main page; subtitle text does not change its identity.
+    if(t=="DATA INDEX")return McduPage::data;
     if(t=="RADIO NAV"||t=="RAD NAV")return McduPage::radnav;
     if(t=="MCDU MENU")return McduPage::menu;
     if(t=="SEC INDEX"||t=="SEC F-PLN INDEX")return McduPage::sec;
+    if(t=="PERF"||t=="TAKE OFF"||t=="CLB"||t=="CRZ"||t=="DES"||t=="APPR"||t=="GO AROUND")return McduPage::perf;
+    if(t=="PROG"||(t.size()>5&&t.substr(t.size()-5)==" PROG"))return McduPage::prog;
+    if(t=="ATC"||t=="ATC COMM"||t=="ATC MENU"||t=="ATSU DATALINK")return McduPage::atc;
     if(t=="INIT") {
         if(s.contains("FROM/TO")||s.contains("CO RTE"))return McduPage::init_a;
         if(s.contains("ZFW/ZFWCG")&&s.contains("BLOCK"))return McduPage::init_b;
@@ -72,7 +96,7 @@ McduPage mcdu_page(const McduScreen& s) {
     // Secondary plans and temporary insertions must never masquerade as active.
     if(s.contains("SEC F-PLN")||s.contains("SECONDARY"))return McduPage::unknown;
     const auto footer=s.line("label6");
-    if(st=="FROM"||(starts(footer,"DEST")&&footer.find("DIST")!=std::string::npos))return McduPage::fpln;
+    if(first_token(st)=="FROM"||(starts(footer,"DEST")&&footer.find("DIST")!=std::string::npos))return McduPage::fpln;
     if((t.empty()||t=="F-PLN")&&starts(s.line("cont1","gw"),"PPOS")&&
        (s.contains("DISCONT")||s.contains("END OF F-PLN")))return McduPage::fpln;
     return McduPage::unknown;
@@ -81,9 +105,11 @@ const char* mcdu_page_name(McduPage p) {
     switch(p) {
         case McduPage::fpln:return "F-PLN";case McduPage::dir:return "DIR TO";
         case McduPage::fuel:return "FUEL PRED";case McduPage::ident:return "A/C STATUS";
-        case McduPage::data:return "DATA INDEX";case McduPage::init_a:return "INIT A";
+        case McduPage::data:return "DATA";case McduPage::init_a:return "INIT A";
         case McduPage::init_b:return "INIT B";case McduPage::radnav:return "RAD NAV";
         case McduPage::menu:return "MCDU MENU";case McduPage::sec:return "SEC INDEX";
+        case McduPage::perf:return "PERF";case McduPage::prog:return "PROG";
+        case McduPage::atc:return "ATC COMM";case McduPage::airport:return "AIR PORT";
         default:return "UNKNOWN";
     }
 }
@@ -93,7 +119,7 @@ FmsPlan parse_fpln(const McduScreen& s) {
     if(s.contains("TMPY")||s.contains("TEMPY")){p.reason="TEMPORARY PLAN";return p;}
     p.observed=true;
     // Without FROM, the top line could be a fix or PPOS. Never infer origin.
-    if(s.line("stitle")=="FROM")p.origin=endpoint(s.line("cont1","gw"));
+    if(first_token(s.line("stitle"))=="FROM")p.origin=endpoint(s.line("cont1","gw"));
     if(starts(s.line("label6"),"DEST"))p.destination=endpoint(s.line("cont6","gw"));
     p.reason=p.origin.airport.empty()&&p.destination.airport.empty()?"NO FLIGHT PLAN":
         p.origin.runway.empty()||p.destination.runway.empty()?"AIRPORTS / RUNWAY UNAVAILABLE":"CONNECTED";
@@ -112,10 +138,25 @@ bool parse_fuel_pred(const McduScreen& s,FmsPlan& p) {
 void FmsSampler::invalidate(const std::string& why) {
     plan_={};plan_.reason=why;sampled_=-1;++generation_;
 }
-void FmsSampler::reset(){*this=FmsSampler{};}
-void FmsSampler::activity(double now) {
+void FmsSampler::reset(bool initial_sample){*this=FmsSampler{initial_sample};}
+void FmsSampler::activity(double now,bool request_sample) {
     last_activity_=now;next_=now+crew_idle_seconds;
+    const bool interrupted_crew=busy()&&sampling_from_crew_;
+    if(request_sample||interrupted_crew) {
+        requested_=true;requested_by_crew_=true;crew_session_=true;crew_retries_=0;
+    }
     if(busy()) {stage_=Stage::idle;pending_valid_=false;invalidate("CREW INTERRUPTED");status_="CREW INTERRUPTED";}
+}
+void FmsSampler::finish_crew_attempt(double now,bool success) {
+    if(!sampling_from_crew_||!crew_session_)return;
+    if(success||crew_retries_>=max_crew_retries){crew_session_=false;return;}
+    ++crew_retries_;requested_=true;requested_by_crew_=true;next_=now+crew_idle_seconds;
+}
+void FmsSampler::stop_automatic_capture() {
+    if(!requested_by_crew_)requested_=false;
+    if(!busy()||sampling_from_crew_||stage_==Stage::restore||stage_==Stage::restore_wait||
+       stage_==Stage::ident_wait||stage_==Stage::init_b_wait)return;
+    pending_valid_=false;invalidate("ECAM PHASE BLOCKED");status_="ECAM PHASE BLOCKED";stage_=Stage::restore;
 }
 std::string FmsSampler::restore_command() const {
     switch(saved_) {
@@ -123,7 +164,9 @@ std::string FmsSampler::restore_command() const {
         case McduPage::fuel:return "FuelPred";case McduPage::ident:case McduPage::data:return "Data";
         case McduPage::init_a:case McduPage::init_b:return "Init";
         case McduPage::radnav:return "RadNav";case McduPage::menu:return "Menu";
-        case McduPage::sec:return "SecFpln";default:return "";
+        case McduPage::sec:return "SecFpln";case McduPage::perf:return "Perf";
+        case McduPage::prog:return "Prog";case McduPage::atc:return "ATC";
+        case McduPage::airport:return "Airport";default:return "";
     }
 }
 std::string FmsSampler::cancel() {
@@ -131,14 +174,17 @@ std::string FmsSampler::cancel() {
     stage_=Stage::idle;pending_valid_=false;invalidate("DISCONNECTED");status_="DISCONNECTED";
     return command;
 }
-std::string FmsSampler::tick(double now,const McduScreen& s,bool usable) {
-    if(sampled_>=0&&now-sampled_>90){invalidate("STALE");status_="STALE";}
-    if(!usable){if(busy())return cancel();if(plan_.observed)invalidate("MCDU2 UNAVAILABLE");status_="MCDU2 UNAVAILABLE";return "";}
+std::string FmsSampler::tick(double now,const McduScreen& s,bool usable,McduPage restore_page) {
+    if(!usable){if(busy()){auto command=cancel();finish_crew_attempt(now,false);return command;}if(plan_.observed)invalidate("MCDU2 UNAVAILABLE");status_="MCDU2 UNAVAILABLE";return "";}
     if(stage_==Stage::idle) {
-        if(now<next_||now-last_activity_<crew_idle_seconds)return "";
-        next_=now+30;
-        if(!s.scratchpad_empty()||s.contains("TMPY")||s.contains("TEMPY")){status_="MCDU BUSY";return "";}
-        saved_=mcdu_page(s);
+        if(!requested_||now<next_||now-last_activity_<crew_idle_seconds)return "";
+        requested_=false;
+        sampling_from_crew_=requested_by_crew_;requested_by_crew_=false;
+        sampling_retry_=sampling_from_crew_?crew_retries_:0;
+        if(!s.scratchpad_empty()||s.contains("TMPY")||s.contains("TEMPY")){status_="MCDU BUSY";finish_crew_attempt(now,false);return "";}
+        // The port supplies the tracked parent even when screen text belongs
+        // to an unrecognized subpage. Snapshot once, before any internal keys.
+        saved_=restore_page==McduPage::unknown?mcdu_page(s):restore_page;
         // No verified restore path: sample anyway and finish on F-PLN.
         if(saved_==McduPage::unknown)saved_=McduPage::fpln;
         pending_valid_=false;stable_key_.clear();stage_=Stage::detour;after_=now+.2;deadline_=now+3;
@@ -151,7 +197,8 @@ std::string FmsSampler::tick(double now,const McduScreen& s,bool usable) {
     }
     if(now>deadline_) {
         if(stage_==Stage::restore_wait||stage_==Stage::ident_wait||stage_==Stage::init_b_wait) {
-            stage_=Stage::idle;next_=now+30;pending_valid_=false;invalidate("RESTORE FAILED");status_="RESTORE FAILED";
+            stage_=Stage::idle;pending_valid_=false;invalidate("RESTORE FAILED");status_="RESTORE FAILED";
+            finish_crew_attempt(now,false);
         } else {pending_valid_=false;invalidate("PAGE TIMEOUT");stage_=Stage::restore;status_="PAGE TIMEOUT";}
         return "";
     }
@@ -206,11 +253,13 @@ std::string FmsSampler::tick(double now,const McduScreen& s,bool usable) {
         if(saved_==McduPage::init_b) {
             if(page==McduPage::init_a){stage_=Stage::init_b_wait;after_=now+.2;deadline_=now+3;return "SlewRight";}
             if(page!=McduPage::init_b)return "";
-        } else if(page!=saved_)return "";
+        } else if(saved_==McduPage::airport? page!=McduPage::fpln : page!=saved_)return "";
     }
     if((stage_==Stage::ident_wait&&page!=McduPage::ident)||(stage_==Stage::init_b_wait&&page!=McduPage::init_b))return "";
     if(pending_valid_) {plan_=pending_;sampled_=now;++generation_;status_=plan_.reason;}
     // Publish only after the saved page has been restored and verified.
-    pending_valid_=false;stage_=Stage::idle;next_=now+30;return "";
+    pending_valid_=false;stage_=Stage::idle;
+    finish_crew_attempt(now,plan_.observed&&!plan_.origin.airport.empty()&&!plan_.destination.airport.empty());
+    return "";
 }
 }

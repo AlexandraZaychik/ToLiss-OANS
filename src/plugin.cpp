@@ -12,6 +12,7 @@
 #include <GL/gl.h>
 #include <GL/glu.h>
 #include "core.hpp"
+#include "about_panel.hpp"
 #include "detail_log.hpp"
 #include "nd_ui.hpp"
 #include "aircraft_profile.hpp"
@@ -44,7 +45,7 @@
 
 using namespace oans;
 namespace {
-constexpr const char* version="0.4.34";
+constexpr const char* version="0.4.35";
 constexpr float white[3]={1,1,1},cyan[3]={.20f,.90f,1},green[3]={0,1,0},amber[3]={1,.65f,0};
 constexpr float taxi_yellow[3]={.95f,.83f,0},magenta[3]={1,.35f,1};
 AtlasFont map_font;
@@ -132,11 +133,12 @@ const std::vector<std::pair<std::string,std::string>> names={
     {"pb","sim/graphics/view/panel_total_pnl_b"},{"pr","sim/graphics/view/panel_total_pnl_r"},{"pt","sim/graphics/view/panel_total_pnl_t"},
     {"icao","sim/aircraft/view/acf_ICAO"},
 };
-struct Config {bool nd=true,test=false,fms=true,simple_stand_names=true,status_bar=false;};
+const char* cursor_settings[]={"pink_vertical","pink_horizontal","yellow_vertical","yellow_horizontal"};
+struct Config {bool nd=true,test=false,fms=true,simple_stand_names=true,status_bar=false;int cursor_style=0;};
 std::string current_surface;
 double surface_sample_at=0;
 SurfaceTracker surface_tracker;
-int status_bar_item=-1;
+int status_bar_item=-1,mcdu2_auto_item=-1;
 Config config;
 double status_bar_height() {return config.status_bar&&!config.test?stus_bar_height:0;}
 McduFmsPort fms_port;
@@ -165,8 +167,13 @@ double cursor_seen=-100;
 std::optional<Vec2> pointer_on_map(int id);
 bool search_built[3]={false,false,false};
 int runway_index=-1;
-XPLMWindowID window=nullptr,mouse_window=nullptr,test_window=nullptr;
-XPLMMenuID menu=nullptr,settings_menu=nullptr,stand_name_menu=nullptr;int menu_item=-1;
+XPLMWindowID window=nullptr,mouse_window=nullptr,test_window=nullptr,about_window=nullptr;
+XPLMMenuID menu=nullptr,settings_menu=nullptr,stand_name_menu=nullptr,cursor_menu=nullptr;int menu_item=-1;
+
+void update_cursor_menu() {
+    if(cursor_menu)for(int i=0;i<4;++i)
+        XPLMCheckMenuItem(cursor_menu,i,config.cursor_style==i?xplm_Menu_Checked:xplm_Menu_Unchecked);
+}
 
 bool draw_registered=false,loop_registered=false;
 double render_gain=1;
@@ -254,6 +261,23 @@ std::deque<IndexEntry> building_queue;
 std::set<std::string> building_pending;
 std::unique_ptr<A350Map> a350_ui;
 Box oans_box;
+Box oans_base_box;
+int oans_vertical_offset=0;
+std::string oans_offset_query="0";
+bool oans_slider_drag=false;
+void set_oans_vertical_offset(int pixels,bool update_field=true) {
+    oans_vertical_offset=std::clamp(pixels,-20,20);
+    oans_box=oans_base_box;
+    oans_box.b-=oans_vertical_offset;oans_box.t-=oans_vertical_offset;
+    if(update_field)oans_offset_query=std::to_string(oans_vertical_offset);
+}
+void apply_oans_offset_field(bool commit=false) {
+    try {
+        size_t used=0;const int pixels=std::stoi(oans_offset_query,&used);
+        if(used==oans_offset_query.size())set_oans_vertical_offset(pixels,commit);
+    } catch(const std::exception&) {}
+    if(commit)oans_offset_query=std::to_string(oans_vertical_offset);
+}
 std::string worker_error,last_requested;
 bool aircraft_position_ready(int side) {
     // Simulator coordinates can exist before the aircraft has an IRS position.
@@ -299,7 +323,7 @@ std::string form_encode(const std::string& input) {
 }
 
 std::string post_overpass(const wchar_t* host,const std::string& body) {
-    WinHttpHandle session{WinHttpOpen(L"ToLissOANS/0.4.34 airport-map",WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+    WinHttpHandle session{WinHttpOpen(L"ToLissOANS/0.4.35 airport-map",WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
                                       WINHTTP_NO_PROXY_NAME,WINHTTP_NO_PROXY_BYPASS,0)};
     if(!session.value)throw std::runtime_error(winhttp_error("WinHttpOpen"));
     if(!WinHttpSetTimeouts(session.value,10000,10000,20000,45000))
@@ -551,6 +575,10 @@ void read_config() {
         bool yes=std::atoi(v.c_str())==1;
         if(key=="stand_name")config.simple_stand_names=v.find("complex")==std::string::npos;
         if(key=="stus_bar")config.status_bar=yes;
+        if(key=="cursor") {
+            v.erase(std::remove_if(v.begin(),v.end(),[](unsigned char c){return std::isspace(c);}),v.end());
+            for(int i=0;i<4;++i)if(v==cursor_settings[i])config.cursor_style=i;
+        }
         if(key=="nd_enabled")config.nd=yes;
         if(key=="test_pattern")config.test=yes;
         if(key=="fms_mcdu2_sampling")config.fms=yes;
@@ -558,7 +586,9 @@ void read_config() {
     OANS_CONFIG("config.ini resolved nd="+std::to_string(config.nd)+" test="+std::to_string(config.test)+" fms="+std::to_string(config.fms)+" simple_stands="+std::to_string(config.simple_stand_names));
     if(in.bad())OANS_CONFIG("config.ini read error; settings may be partial");
     update_stand_names();
+    update_cursor_menu();
     if(settings_menu&&status_bar_item>=0)XPLMCheckMenuItem(settings_menu,status_bar_item,config.status_bar?xplm_Menu_Checked:xplm_Menu_Unchecked);
+    if(settings_menu&&mcdu2_auto_item>=0)XPLMCheckMenuItem(settings_menu,mcdu2_auto_item,config.fms?xplm_Menu_Checked:xplm_Menu_Unchecked);
     current_surface.clear();
     surface_sample_at=0;
     surface_tracker.reset();
@@ -598,6 +628,9 @@ void diagnostics() {
      <<" plan_status="<<plan.reason<<" origin="<<plan.origin.airport<<" departure_runway="<<plan.origin.runway
      <<" destination="<<plan.destination.airport<<" arrival_runway="<<plan.destination.runway<<" alternate="<<plan.alternate
      <<" saved_page="<<mcdu_page_name(fms_port.sampler.saved_page())<<'\n';
+    f<<"FMS_AUTO ecam_phase="<<fms_port.automatic.phase()<<" confirmations="<<fms_port.automatic.confirmations()
+     <<" complete="<<fms_port.automatic.complete()<<'\n';
+    f<<"MCDU_MAJOR mcdu1="<<fms_port.major_page(1)<<" mcdu2="<<fms_port.major_page(2)<<'\n';
     f<<"RWY_AHEAD_TEST active="<<advisory_test.active<<" pending="<<advisory_test.pending<<" steady="<<advisory_test.steady
      <<" airport="<<advisory_test.airport_query<<" runway="<<advisory_test.runway_query<<" message="<<advisory_test.message<<'\n';
     for(int side=0;side<2;++side)f<<"RWY_AHEAD_display side="<<side<<" nd="<<advisory_display_available(side,false)
@@ -640,7 +673,8 @@ void diagnostics() {
     for(int side=0;side<2;++side) {
         f<<"ND_state side="<<side<<" enabled="<<nd_on[side]<<" blocked="<<nd_blocked(side)<<'\n';
         f<<"OANS_switch side="<<side<<" visible="<<(nd_overlay_blocked(side)[0]=='\0')<<" checked="<<nd_on[side]
-         <<" bounds="<<oans_box.l<<','<<oans_box.b<<','<<oans_box.r<<','<<oans_box.t<<'\n';
+         <<" bounds="<<oans_box.l<<','<<oans_box.b<<','<<oans_box.r<<','<<oans_box.t
+         <<" vertical_offset_px="<<oans_vertical_offset<<'\n';
     }
     for(int i=0;i<3;++i)f<<"view="<<i<<" panel="<<static_cast<int>(views[i].panel)<<" range_nm="<<views[i].range_nm
         <<" follow="<<views[i].follow<<" query="<<views[i].query<<" search_results="<<views[i].results.size()
@@ -1221,11 +1255,13 @@ void render_rect(double l,double b,double width,double height,int id,bool nd) {
         if(!map_font.upload(XPLMGenerateTextureNumbers,XPLMBindTexture2d))
             throw std::runtime_error("A350 checkbox font atlas upload failed");
         XPLMSetGraphicsState(0,1,0,0,1,0,0);XPLMBindTexture2d(map_font.texture(),0);
-        draw_a350_vertices(a350_ui->oans_switch(nd_on[id]).vertices,render_gain);graphics();
+        glPushMatrix();glTranslated(0,-oans_vertical_offset,0);
+        draw_a350_vertices(a350_ui->oans_switch(nd_on[id]).vertices,render_gain);
+        glPopMatrix();graphics();
     }
     if(!nd||advisory_display_available(id,false))draw_advisory(id);
     if(a350_ui&&(!nd||nd_on[id]))if(auto at=pointer_on_map(id)) {
-        const auto& vertices=a350_ui->cursor(*at);
+        const auto& vertices=a350_ui->cursor(*at,config.cursor_style%2!=0,config.cursor_style>=2);
         XPLMSetGraphicsState(0,1,0,0,1,0,0);XPLMBindTexture2d(map_font.texture(),0);
         draw_a350_vertices(vertices,render_gain);graphics();
     }
@@ -1606,10 +1642,12 @@ void start_advisory_test() {
 }
 void close_test_window() {
     if(!test_window)return;
+    apply_oans_offset_field(true);oans_slider_drag=false;
     if(advisory_test.focused)XPLMTakeKeyboardFocus(nullptr);
     advisory_test.focused=false;XPLMSetWindowIsVisible(test_window,0);
 }
 void focus_test_field(int field) {
+    if(advisory_test.field==2)apply_oans_offset_field(true);
     release_input();advisory_test.field=field;advisory_test.replace=true;
     XPLMTakeKeyboardFocus(test_window);advisory_test.focused=true;
 }
@@ -1622,6 +1660,7 @@ void toggle_test_window() {
 }
 const Box test_airport_box{140,232,532,266},test_runway_box{140,180,532,214};
 const Box test_steady_box{20,132,330,164},test_enable_box{20,82,190,116},test_stop_box{204,82,362,116},test_close_box{376,82,532,116};
+const Box test_offset_box{452,350,532,384},test_offset_slider{180,350,432,384},test_offset_reset{452,300,532,332};
 void test_draw(XPLMWindowID w,void*) {
     OANS_TRACE_SCOPE();
     OANS_TRACE("OpenGL capture/setup begin");
@@ -1632,7 +1671,16 @@ void test_draw(XPLMWindowID w,void*) {
         const float* edge=selected?cyan:white;rect(l+box.l,b+box.b,l+box.r,b+box.t,edge);
         rect(l+box.l+1,b+box.b+1,l+box.r-1,b+box.t-1,fill);text(l+box.l+8,b+box.b+11,label,selected?cyan:white);
     };
-    text(l+20,t-30,"RWY AHEAD TEST",cyan);
+    text(l+20,t-30,"OANS TEST",cyan);
+    text(l+20,b+404,"OANS button vertical offset (ND pixels)",cyan);
+    text(l+20,b+362,"-20 up / +20 down");
+    rect(l+180,b+365,l+432,b+369,white);
+    const double knob=l+180+(oans_vertical_offset+20)*252.0/40;
+    rect(knob-4,b+357,knob+4,b+377,cyan);
+    button(test_offset_box,oans_offset_query+(advisory_test.focused&&advisory_test.field==2?" |":""),advisory_test.focused&&advisory_test.field==2);
+    button(test_offset_reset,"Reset 0");
+    text(l+20,b+314,"Live on both NDs. 0 = current layout. Session only.");
+    text(l+20,b+286,"RWY AHEAD TEST",cyan);
     text(l+20,b+244,"Airport");text(l+20,b+192,"Runway(s)");
     button(test_airport_box,advisory_test.airport_query+(advisory_test.focused&&advisory_test.field==0?" |":""),advisory_test.focused&&advisory_test.field==0);
     button(test_runway_box,advisory_test.runway_query+(advisory_test.focused&&advisory_test.field==1?" |":""),advisory_test.focused&&advisory_test.field==1);
@@ -1644,10 +1692,26 @@ void test_draw(XPLMWindowID w,void*) {
 }
 void test_key(XPLMWindowID w,char key,XPLMKeyFlags flags,char virtual_key,void*,int losing) {
     OANS_TRACE_SCOPE();
-    if(losing) {advisory_test.focused=false;return;}
+    if(losing) {apply_oans_offset_field(true);advisory_test.focused=false;return;}
     if(w!=test_window||!enabled||!XPLMGetWindowIsVisible(w)||!(flags&xplm_DownFlag))return;
     if(key==27) {close_test_window();return;}
-    if(key==9) {focus_test_field(1-advisory_test.field);return;}
+    if(key==9) {focus_test_field((advisory_test.field+1)%3);return;}
+    if(advisory_test.field==2) {
+        if(key==13) {apply_oans_offset_field(true);advisory_test.replace=true;return;}
+        if((flags&xplm_ControlFlag)&&(virtual_key==XPLM_VK_A||key=='a'||key=='A')) {advisory_test.replace=true;return;}
+        if(flags&xplm_ControlFlag)return;
+        if(key==8) {
+            if(advisory_test.replace)oans_offset_query.clear();else if(!oans_offset_query.empty())oans_offset_query.pop_back();
+            advisory_test.replace=false;apply_oans_offset_field();return;
+        }
+        if((key>='0'&&key<='9')||key=='-'||key=='+') {
+            if(advisory_test.replace)oans_offset_query.clear();
+            advisory_test.replace=false;
+            if(oans_offset_query.size()<3&&((key!='-'&&key!='+')||oans_offset_query.empty()))oans_offset_query+=key;
+            apply_oans_offset_field();
+        }
+        return;
+    }
     if(key==13) {start_advisory_test();return;}
     auto& field=advisory_test.field==0?advisory_test.airport_query:advisory_test.runway_query;
     if(flags&xplm_ControlFlag) {
@@ -1673,9 +1737,20 @@ void test_key(XPLMWindowID w,char key,XPLMKeyFlags flags,char virtual_key,void*,
 }
 int test_click(XPLMWindowID w,int x,int y,XPLMMouseStatus action,void*) {
     OANS_TRACE_SCOPE();OANS_TRACE("Mouse x="+std::to_string(x)+" y="+std::to_string(y)+" action="+std::to_string(action));
-    if(action!=xplm_MouseDown||!enabled)return 1;
+    if(!enabled)return 1;
     int l,t,r,b;XPLMGetWindowGeometry(w,&l,&t,&r,&b);Vec2 p{double(x-l),double(y-b)};
-    if(test_airport_box.contains(p))focus_test_field(0);
+    if(action==xplm_MouseDown&&test_offset_slider.contains(p)) {
+        focus_test_field(2);oans_slider_drag=true;
+    }
+    if(oans_slider_drag) {
+        set_oans_vertical_offset(static_cast<int>(std::lround((std::clamp(p.x,180.0,432.0)-180)*40/252-20)));
+        if(action==xplm_MouseUp)oans_slider_drag=false;
+        return 1;
+    }
+    if(action!=xplm_MouseDown)return 1;
+    if(test_offset_box.contains(p))focus_test_field(2);
+    else if(test_offset_reset.contains(p)) {set_oans_vertical_offset(0);advisory_test.replace=true;}
+    else if(test_airport_box.contains(p))focus_test_field(0);
     else if(test_runway_box.contains(p))focus_test_field(1);
     else if(test_steady_box.contains(p)) {
         advisory_test.steady=!advisory_test.steady;
@@ -1686,7 +1761,60 @@ int test_click(XPLMWindowID w,int x,int y,XPLMMouseStatus action,void*) {
     else if(test_close_box.contains(p))close_test_window();
     return 1;
 }
-int test_wheel(XPLMWindowID,int,int,int,int,void*) {return 1;}
+int test_wheel(XPLMWindowID w,int x,int y,int,int clicks,void*) {
+    if(w!=test_window||!enabled||!XPLMGetWindowIsVisible(w))return 1;
+    int l,t,r,b;XPLMGetWindowGeometry(w,&l,&t,&r,&b);Vec2 p{double(x-l),double(y-b)};
+    if(test_offset_slider.contains(p)||test_offset_box.contains(p)) {
+        set_oans_vertical_offset(oans_vertical_offset+std::clamp(clicks,-40,40));
+        advisory_test.replace=true;
+    }
+    return 1;
+}
+GLuint about_texture=0;
+HGLRC about_context=nullptr;
+void about_release() {
+    if(about_texture&&wglGetCurrentContext()==about_context)glDeleteTextures(1,&about_texture);
+    about_texture=0;about_context=nullptr;
+}
+void about_draw(XPLMWindowID w,void*) {
+    DrawingState drawing_state(graphics,restore_graphics);
+    int l,t,r,b;XPLMGetWindowGeometry(w,&l,&t,&r,&b);
+    if(!about_texture||about_context!=wglGetCurrentContext()) {
+        about_texture=0;
+        try {
+            const auto pixels=raster_about_panel(version);
+            GLint unpack=0;glGetIntegerv(0x88EF,&unpack);
+            using BindBuffer=void(APIENTRY*)(GLenum,GLuint);
+            auto bind_buffer=gl_proc<BindBuffer>("glBindBuffer");
+            if(unpack&&!bind_buffer)return;
+            if(unpack)bind_buffer(0x88EC,0);
+            glPushClientAttrib(GL_CLIENT_PIXEL_STORE_BIT);
+            glPixelStorei(GL_UNPACK_ALIGNMENT,1);glPixelStorei(GL_UNPACK_ROW_LENGTH,0);
+            glPixelStorei(GL_UNPACK_SKIP_ROWS,0);glPixelStorei(GL_UNPACK_SKIP_PIXELS,0);
+            int texture=0;XPLMGenerateTextureNumbers(&texture,1);about_texture=texture;
+            XPLMBindTexture2d(texture,0);
+            glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,about_width*2,about_height*2,0,0x80E1,GL_UNSIGNED_BYTE,pixels.data());
+            glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,0x812F);
+            glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,0x812F);
+            glPopClientAttrib();if(unpack)bind_buffer(0x88EC,unpack);
+            about_context=wglGetCurrentContext();
+        } catch(const std::exception& e) {log(e.what());return;}
+    }
+    XPLMSetGraphicsState(0,1,0,0,1,0,0);XPLMBindTexture2d(about_texture,0);
+    glTexEnvi(GL_TEXTURE_ENV,GL_TEXTURE_ENV_MODE,GL_MODULATE);glColor4f(1,1,1,1);
+    glBegin(GL_QUADS);
+    glTexCoord2f(0,0);glVertex2i(l,t);glTexCoord2f(1,0);glVertex2i(r,t);
+    glTexCoord2f(1,1);glVertex2i(r,b);glTexCoord2f(0,1);glVertex2i(l,b);
+    glEnd();
+}
+int about_click(XPLMWindowID,int,int,XPLMMouseStatus,void*) {return 1;}
+void about_key(XPLMWindowID w,char key,XPLMKeyFlags flags,char,void*,int losing) {
+    if(!losing&&(flags&xplm_DownFlag)&&key==27) {
+        XPLMSetWindowIsVisible(w,0);XPLMTakeKeyboardFocus(nullptr);
+    }
+}
 void toggle_window() {if(window) {if(input_owner==2)release_input();
     const bool visible=!XPLMGetWindowIsVisible(window);
     if(visible)confirm_first_oans_position();
@@ -1695,7 +1823,7 @@ void menu_action(void*,void* item) {
     OANS_TRACE_SCOPE();
     const auto action=reinterpret_cast<std::intptr_t>(item);
     OANS_TRACE("Menu action="+std::to_string(action));
-    if(!enabled&&action!=1&&action!=5)return;
+    if(!enabled&&action!=1&&action!=5&&action!=23)return;
     switch(action) {
         case 1:toggle_window();break;
         case 2:release_input();toggle_nd(0);break;
@@ -1715,17 +1843,26 @@ void menu_action(void*,void* item) {
         case 17:views[0].follow=true;break;
         case 18:views[1].follow=true;break;
         case 19:toggle_test_window();break;
-        case 20:case 21:case 22: {
+        case 23:if(about_window) {XPLMSetWindowIsVisible(about_window,1);XPLMTakeKeyboardFocus(about_window);}break;
+        case 20:case 21:case 22:case 24:case 25:case 26:case 27:case 28: {
             release_input();
             const bool bar=action==22;
-            if(bar) {
+            const bool cursor=action>=24&&action<=27;
+            const bool mcdu2=action==28;
+            if(mcdu2) {
+                config.fms=!config.fms;
+                fms_port.clear(true);fms_bind_at=0;fms_generation_seen=0;choose_at=0;
+                XPLMCheckMenuItem(settings_menu,mcdu2_auto_item,config.fms?xplm_Menu_Checked:xplm_Menu_Unchecked);
+                log(config.fms?"Auto info from MCDU2 ON":"Auto info from MCDU2 OFF");
+            } else if(cursor) {config.cursor_style=static_cast<int>(action-24);update_cursor_menu();}
+            else if(bar) {
                 config.status_bar=!config.status_bar;
                 XPLMCheckMenuItem(settings_menu,status_bar_item,config.status_bar?xplm_Menu_Checked:xplm_Menu_Unchecked);
             } else {config.simple_stand_names=action==20;update_stand_names();}
             current_surface.clear();
             surface_sample_at=0;
             surface_tracker.reset();
-            const std::string setting=bar?"stus_bar":"stand_name";
+            const std::string setting=mcdu2?"fms_mcdu2_sampling":cursor?"cursor":bar?"stus_bar":"stand_name";
             std::ifstream in(plugin_dir/"config.ini");std::string line,contents;
             while(std::getline(in,line)) {
                 auto key=line.substr(0,line.find('='));
@@ -1734,7 +1871,7 @@ void menu_action(void*,void* item) {
             }
             in.close();
             std::ofstream out(plugin_dir/"config.ini");
-            out<<contents<<setting<<'='<<(bar?(config.status_bar?"1":"0"):(config.simple_stand_names?"simple":"complex"))<<"\n";
+            out<<contents<<setting<<'='<<(mcdu2?(config.fms?"1":"0"):cursor?cursor_settings[config.cursor_style]:bar?(config.status_bar?"1":"0"):(config.simple_stand_names?"simple":"complex"))<<"\n";
             if(!out)log("Could not save "+setting+" setting");
             break;
         }
@@ -1754,12 +1891,17 @@ void create_ui() {
     w.visible=1;w.decorateAsFloatingWindow=xplm_WindowDecorationNone;w.layer=xplm_WindowLayerFloatingWindows;
     w.drawWindowFunc=overlay_draw;w.handleMouseClickFunc=overlay_click;w.handleRightClickFunc=overlay_right;w.handleKeyFunc=ui_key;w.handleMouseWheelFunc=overlay_wheel;
     mouse_window=XPLMCreateWindowEx(&w);
-    w.left=left+180;w.top=std::min(top-80,bottom+700);w.right=w.left+560;w.bottom=w.top-340;w.visible=0;
+    w.left=left+180;w.top=std::min(top-80,bottom+700);w.right=w.left+560;w.bottom=w.top-470;w.visible=0;
     w.decorateAsFloatingWindow=xplm_WindowDecorationRoundRectangle;
     w.drawWindowFunc=test_draw;w.handleMouseClickFunc=test_click;w.handleRightClickFunc=test_click;w.handleKeyFunc=test_key;w.handleMouseWheelFunc=test_wheel;
     w.handleCursorFunc=cursor_noop;
     test_window=XPLMCreateWindowEx(&w);
-    if(test_window) {XPLMSetWindowTitle(test_window,"ToLiss OANS - Test");XPLMSetWindowResizingLimits(test_window,560,340,560,340);}
+    if(test_window) {XPLMSetWindowTitle(test_window,"ToLiss OANS - Test");XPLMSetWindowResizingLimits(test_window,560,470,560,470);}
+    w.left=left+std::max(0,(right-left-about_width)/2);w.top=top-std::max(30,(top-bottom-about_height)/2);
+    w.right=w.left+about_width;w.bottom=w.top-about_height;
+    w.drawWindowFunc=about_draw;w.handleMouseClickFunc=about_click;w.handleRightClickFunc=about_click;w.handleKeyFunc=about_key;
+    about_window=XPLMCreateWindowEx(&w);
+    if(about_window) {XPLMSetWindowTitle(about_window,"ToLiss OANS - About");XPLMSetWindowResizingLimits(about_window,about_width,about_height,about_width,about_height);}
     menu_item=XPLMAppendMenuItem(XPLMFindPluginsMenu(),"ToLiss OANS",nullptr,0);
     menu=XPLMCreateMenu("ToLiss OANS",XPLMFindPluginsMenu(),menu_item,menu_action,nullptr);
     const char* labels[]={"Open Airport Map Window","Toggle captain ND map","Toggle FO ND map","Toggle ND calibration pattern","Write interface / click report","Reload config and aircraft profile","","Return to nearest airport",
@@ -1786,6 +1928,14 @@ void create_ui() {
     status_bar_item=XPLMAppendMenuItem(settings_menu,"stus_bar",reinterpret_cast<void*>(std::intptr_t(22)),0);
     XPLMCheckMenuItem(settings_menu,status_bar_item,config.status_bar?xplm_Menu_Checked:xplm_Menu_Unchecked);
     update_stand_names();
+    const int cursor_item=XPLMAppendMenuItem(settings_menu,"Cursor",nullptr,0);
+    cursor_menu=XPLMCreateMenu("Cursor",settings_menu,cursor_item,menu_action,nullptr);
+    const char* cursor_labels[]={"Pink - Vertical (default)","Pink - Horizontal","Yellow - Vertical","Yellow - Horizontal"};
+    for(int i=0;i<4;++i)XPLMAppendMenuItem(cursor_menu,cursor_labels[i],reinterpret_cast<void*>(std::intptr_t(24+i)),0);
+    update_cursor_menu();
+    mcdu2_auto_item=XPLMAppendMenuItem(settings_menu,"auto info from mcdu2",reinterpret_cast<void*>(std::intptr_t(28)),0);
+    XPLMCheckMenuItem(settings_menu,mcdu2_auto_item,config.fms?xplm_Menu_Checked:xplm_Menu_Unchecked);
+    XPLMAppendMenuItem(menu,"About",reinterpret_cast<void*>(std::intptr_t(23)),0);
 }
 float tick(float elapsed,float,int,void*) {
     OANS_TRACE_SCOPE();
@@ -1795,7 +1945,10 @@ float tick(float elapsed,float,int,void*) {
         if(heartbeat>=bind_at) {bind_at=heartbeat+5;bind_refs();}
         if(heartbeat>=traffic_sample_at) {traffic_sample_at=heartbeat+.1;refresh_tcas_targets();}
         if(!aircraft_ok&&heartbeat>=model_check_at) {model_check_at=heartbeat+5;inspect_model();}
-        if(config.fms&&aircraft_ok&&heartbeat>=fms_bind_at) {fms_bind_at=heartbeat+5;fms_port.bind();}
+        if(aircraft_ok&&heartbeat>=fms_bind_at) {
+            fms_bind_at=heartbeat+5;
+            if(config.fms)fms_port.bind();else fms_port.bind_activity();
+        }
         fms_port.tick(heartbeat,config.fms&&aircraft_ok&&std::max(value("bus",0),value("bus",1))>=20);
         if(fms_generation_seen!=fms_port.sampler.generation()) {
             fms_generation_seen=fms_port.sampler.generation();
@@ -1928,15 +2081,20 @@ void cleanup() {
     commands.clear();
     if(mouse_window)XPLMDestroyWindow(mouse_window);
     mouse_window=nullptr;
+    about_release();
+    if(about_window)XPLMDestroyWindow(about_window);
+    about_window=nullptr;
     if(test_window)XPLMDestroyWindow(test_window);
     test_window=nullptr;
     if(window)XPLMDestroyWindow(window);
     window=nullptr;
     if(stand_name_menu)XPLMDestroyMenu(stand_name_menu);
     stand_name_menu=nullptr;
+    if(cursor_menu)XPLMDestroyMenu(cursor_menu);
+    cursor_menu=nullptr;
     if(settings_menu)XPLMDestroyMenu(settings_menu);
     settings_menu=nullptr;
-    status_bar_item=-1;current_surface.clear();
+    status_bar_item=-1;mcdu2_auto_item=-1;current_surface.clear();
     if(menu)XPLMDestroyMenu(menu);
     menu=nullptr;
     if(menu_item>=0)XPLMRemoveMenuItem(XPLMFindPluginsMenu(),menu_item);
@@ -1975,7 +2133,8 @@ PLUGIN_API int XPluginStart(char* name,char* signature,char* description) {
         OANS_TRACE("Startup A350 UI initialization begin");
         a350_ui=std::make_unique<A350Map>(plugin_dir/"assets");
         const auto& bounds=a350_ui->oans_switch(false).bounds;
-        oans_box={bounds[0],bounds[1],bounds[2],bounds[3]};
+        oans_base_box={bounds[0],bounds[1],bounds[2],bounds[3]};
+        set_oans_vertical_offset(0);oans_slider_drag=false;
         nd_on[0]=nd_on[1]=false;
         read_config();bind_refs(false);inspect_model();create_ui();
         start_worker();XPLMRegisterFlightLoopCallback(tick,-1,nullptr);loop_registered=true;
@@ -1985,6 +2144,7 @@ PLUGIN_API int XPluginStart(char* name,char* signature,char* description) {
         // Keep the initial registration: 00_ToLissOANS must load before the
         // aircraft systems for this callback to retain the final ND image.
         if(!draw_registered)status="ND DRAW CALLBACK UNAVAILABLE: USE PLUGIN WINDOW";
+        fms_port.log_event=log;
         diagnostics();log("Native OANS plugin loaded. ND profile loaded="+std::to_string(profile_ok));return 1;
     } catch(const std::exception& e) {log(e.what());cleanup();detail::shutdown();return 0;}
 }
@@ -2002,6 +2162,8 @@ PLUGIN_API void XPluginReceiveMessage(XPLMPluginID from,int message,void* param)
         {std::lock_guard<std::mutex> lock(db_mutex);
             advisory_request.reset();pending_advisory.reset();advisory_requested.clear();}
         fms_port.clear(false);fms_bind_at=0;fms_generation_seen=0;
+        if((message==XPLM_MSG_PLANE_LOADED||message==XPLM_MSG_PLANE_UNLOADED)&&reinterpret_cast<std::intptr_t>(param)==0)
+            fms_port.reset_major_pages();
     }
     if(message==XPLM_MSG_PLANE_UNLOADED&&reinterpret_cast<std::intptr_t>(param)==0) {
         aircraft_ok=false;

@@ -58,7 +58,7 @@ public:
     const std::vector<A350Vertex>& render_dynamic(const A350View& view);
     const std::vector<A350RunwayLabel>& runway_labels(int side) const;
     const A350Switch& oans_switch(bool on) const;
-    const std::vector<A350Vertex>& cursor(Vec2 at);
+    const std::vector<A350Vertex>& cursor(Vec2 at,bool horizontal=false,bool yellow=false);
     const std::vector<A350Vertex>& plan_notice(int mode,bool outside);
     const std::vector<A350Vertex>& advisory(int mode,bool pfd,const std::vector<RunwayAheadHit>& hits,
                                     const std::string& fms_runway,bool blink);

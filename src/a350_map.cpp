@@ -151,10 +151,11 @@ A350Map::A350Map(const std::filesystem::path& assets,const IndexEntry& e,
     lua_settop(L,0);
 }
 A350Map::~A350Map()=default;
-const std::vector<A350Vertex>& A350Map::cursor(Vec2 at) {
+const std::vector<A350Vertex>& A350Map::cursor(Vec2 at,bool horizontal,bool yellow) {
     OANS_TRACE_SCOPE();
     auto& p=*p_;auto L=p.L;lua_settop(L,0);lua_getglobal(L,"a350_cursor");
-    lua_pushnumber(L,at.x);lua_pushnumber(L,at.y);p.check(lua_pcall(L,2,1,0));
+    lua_pushnumber(L,at.x);lua_pushnumber(L,at.y);
+    lua_pushboolean(L,horizontal);lua_pushboolean(L,yellow);p.check(lua_pcall(L,4,1,0));
     p.draw_buffer.copy(L,p.cursor_vertices);lua_settop(L,0);return p.cursor_vertices;
 }
 const std::vector<A350Vertex>& A350Map::plan_notice(int mode,bool outside) {

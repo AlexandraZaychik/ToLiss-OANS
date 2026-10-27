@@ -39,17 +39,21 @@ local function select_stand_names(G, simple)
 end
 
 -- Dynamic pointer is separate from the cached airport buffer.
-function a350_cursor(x, y)
+function a350_cursor(x, y, horizontal, yellow)
     GLB.n, GLB.cap = 0, 180000
     native_draw_reset()
     GLB.wu, GLB.wv, GLB.px, GLB.ts = TF.wu, TF.wv, 1, 2
     DL.begin({2,0,0,0,-2,600,0,0}, 300, 300)
     x, y = x/2, (600-y)/2
-    local col = 0xFFFF00FF -- magenta, same packed ABGR as the upstream palette
-    -- Vertical inward chevrons, rotated 90 degrees about the click hotspot.
+    local col = yellow and 0xFF00FFFF or 0xFFFF00FF -- packed ABGR
+    local function line(dx1, dy1, dx2, dy2)
+        if horizontal then dx1, dy1, dx2, dy2 = dy1, -dx1, dy2, -dx2 end
+        DL.line(x+dx1,y+dy1,x+dx2,y+dy2,col,.6)
+    end
+    -- Rotate the inward chevrons about the unchanged click hotspot.
     for _, d in ipairs({-1,1}) do
-        DL.line(x-7.5,y+d*10,x,y+d*3,col,.6)
-        DL.line(x,y+d*3,x+7.5,y+d*10,col,.6)
+        line(-7.5,d*10,0,d*3)
+        line(0,d*3,7.5,d*10)
     end
     DL.line(x-.2,y,x+.2,y,col,.8)
     return GLB.n
@@ -125,9 +129,21 @@ function a350_oans_switch(on)
     DL.begin({2,0,0,0,-2,600,0,0}, 300, 300)
     FONT_H = TXT.h
     nd_layout()
-    draw_oans_box(OANS_R, on, false)
+    -- Compact A320 switch: final baseline is 4 ND pixels above the test layout.
+    local right = 299
+    local box = {right-(2+7+2+text_w("OANS", TXT.small)+1),
+                 OANS_R[2]+5, right, OANS_R[4]+5}
+    nd_key(box, false)
+    local bs = 7
+    local bx, by = box[1]+2, (box[2]+box[4])/2-bs/2+0.5
+    DL.rect(bx, by, bx+bs, by+bs, MC.sel, 0, 0, 0.9)
+    if on then
+        DL.line(bx+1.4, by+3.8, bx+3.0, by+5.6, MC.green, 1.4)
+        DL.line(bx+3.0, by+5.6, bx+5.9, by+1.4, MC.green, 1.4)
+    end
+    DL.text(bx+bs+2, (box[2]+box[4])/2-FONT_H/2+0.5, MC.sel, "OANS", TXT.small)
     return GLB.n,
-           OANS_R[1]*2, 600-OANS_R[4]*2, OANS_R[3]*2, 600-OANS_R[2]*2
+           box[1]*2, 600-box[4]*2, box[3]*2, 600-box[2]*2
 end
 
 -- Font loader's upstream filename is kept; only this path is mapped by host.

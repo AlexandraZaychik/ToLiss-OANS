@@ -21,14 +21,36 @@ void McduFmsPort::send(const std::string& suffix) {
     auto it=pages_.find(suffix);if(it==pages_.end()||!it->second)return;
     issuing_=true;XPLMCommandOnce(it->second);issuing_=false;
 }
-int McduFmsPort::activity(XPLMCommandRef,XPLMCommandPhase phase,void* ptr) {
+void McduFmsPort::finish_detection(const std::string& result) {
+    if(!detection_source_.empty()&&log_event)log_event(detection_source_+" "+result);
+    detection_source_.clear();
+}
+int McduFmsPort::activity(XPLMCommandRef command,XPLMCommandPhase phase,void* ptr) {
     OANS_TRACE_SCOPE();
     auto& p=*static_cast<McduFmsPort*>(ptr);
-    if(!p.issuing_&&(phase==xplm_CommandBegin||phase==xplm_CommandContinue))p.sampler.activity(XPLMGetElapsedTime());
+    if(!p.issuing_&&(phase==xplm_CommandBegin||phase==xplm_CommandContinue)) {
+        const auto it=p.observed_.find(command);
+        if(it!=p.observed_.end()&&it->second.unit==2)p.mcdu2_operated_=true;
+        bool request_sample=false;
+        if(phase==xplm_CommandBegin&&it!=p.observed_.end()) {
+            const auto& key=it->second;
+            const auto& parent=p.major_pages_[key.unit-1];
+            request_sample=(parent=="INIT"&&(key.key=="LSK1R"||key.key=="LSK2L"))||
+                           (parent=="F-PLN"&&key.key=="LSK6R");
+            if(request_sample)p.trigger_source_="trigger detect "+parent+" "+key.key;
+        }
+        if(p.sampler.busy())p.finish_detection("fail (crew interrupted)");
+        p.sampler.activity(XPLMGetElapsedTime(),request_sample);
+        if(phase==xplm_CommandBegin&&it!=p.observed_.end()&&!it->second.major.empty()) {
+            p.major_pages_[it->second.unit-1]=it->second.major;
+            OANS_TRACE("MCDU"+std::to_string(it->second.unit)+" major_page="+it->second.major);
+        }
+    }
     return 1;
 }
 bool McduFmsPort::bind() {
     OANS_TRACE_SCOPE();
+    bind_activity();
     if(ready())return true;
     auto bind_text=[&](std::string name) {
         OANS_TRACE("MCDU bind text="+name);
@@ -45,32 +67,87 @@ bool McduFmsPort::bind() {
     for(const auto& key:page_keys)pages_[key]=XPLMFindCommand(("AirbusFBW/MCDU2"+key).c_str());
     pages_["LSK4L"]=XPLMFindCommand("AirbusFBW/MCDU2LSK4L");
     for(const char* key:{"DirTo","Fpln","FuelPred","Data","LSK4L","SlewRight"})if(!pages_[key]){pages_.clear();text_.clear();return false;}
+    return true;
+}
+void McduFmsPort::bind_activity() {
+    const std::map<std::string,std::string> major_keys={
+        {"DirTo","DIR"},{"Prog","PROG"},{"Perf","PERF"},{"Init","INIT"},{"Data","DATA"},
+        {"Fpln","F-PLN"},{"RadNav","RAD NAV"},{"FuelPred","FUEL PRED"},
+        {"SecFpln","SEC F-PLN"},{"ATC","ATC COMM"},{"Menu","MCDU MENU"},{"Airport","AIR PORT"}};
+    // Retry missing commands without duplicating registered handlers. Independent
+    // of the MCDU2 text provider and automatic sampling setting.
     // Observe both keyboards: MCDU1 route edits must also defer background reads.
     // Never intercept/suppress input and never observe our own dispatch as crew input.
     for(int unit:{1,2}) {
-        std::vector<std::string> keys=page_keys;
+        std::vector<std::string> keys;
+        for(const auto& key:major_keys)keys.push_back(key.first);
+        for(const char* key:{"SlewDown","SlewUp","SlewLeft","SlewRight"})keys.emplace_back(key);
         for(int i=1;i<=6;++i)for(char c:std::string("LR"))keys.push_back("LSK"+std::to_string(i)+c);
         for(char c:std::string("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"))keys.push_back(std::string("Key")+c);
         for(const char* k:{"KeySlash","KeySpace","KeyOverfly","KeyClear","KeyDecimal","KeyPM","KeyBright","KeyDim"})keys.emplace_back(k);
         for(const auto& key:keys)if(auto cmd=XPLMFindCommand(("AirbusFBW/MCDU"+std::to_string(unit)+key).c_str())) {
-            XPLMRegisterCommandHandler(cmd,activity,1,this);observed_.push_back(cmd);
+            if(observed_.count(cmd))continue;
+            auto major=major_keys.find(key);
+            observed_.emplace(cmd,ObservedKey{unit,major==major_keys.end()?"":major->second,key});
+            XPLMRegisterCommandHandler(cmd,activity,1,this);
         }
     }
-    return true;
 }
 void McduFmsPort::tick(double now,bool usable) {
     OANS_TRACE_SCOPE();
     if(!ready())return;
+    if(automatic.phase_due(now)) {
+        // Resolve again on each scheduled read: a missing provider may appear
+        // after aircraft initialization. Invalid/missing phases use a 5s retry.
+        auto ref=XPLMFindDataRef("AirbusFBW/ECAMFlightPhase");
+        const int phase=ref&&(XPLMGetDataRefTypes(ref)&xplmType_Int)?XPLMGetDatai(ref):0;
+        automatic.update_phase(now,phase);
+    }
+    if(!automatic.capture_allowed())sampler.stop_automatic_capture();
+    if(automatic.request_due(now,usable,sampler.busy()))sampler.request();
     McduScreen screen;
     if(usable&&sampler.wants_screen(now)) {
         if(now<next_read_)return;
         next_read_=now+.1;screen=read();
     }
     OANS_TRACE("MCDU sampler usable="+std::to_string(usable)+" busy="+std::to_string(sampler.busy())+" generation="+std::to_string(sampler.generation()));
-    const auto command=sampler.tick(now,screen,usable);if(!command.empty())send(command);
+    static const std::map<std::string,McduPage> parents={
+        {"DATA",McduPage::data},{"DIR",McduPage::dir},{"PROG",McduPage::prog},
+        {"PERF",McduPage::perf},{"INIT",McduPage::init_a},{"F-PLN",McduPage::fpln},
+        {"RAD NAV",McduPage::radnav},{"FUEL PRED",McduPage::fuel},{"SEC F-PLN",McduPage::sec},
+        {"ATC COMM",McduPage::atc},{"MCDU MENU",McduPage::menu},{"AIR PORT",McduPage::airport}};
+    const bool was_busy=sampler.busy();
+    const bool starting=usable&&!was_busy&&sampler.wants_screen(now);
+    // An untouched MCDU2 starts on A/C STATUS. Restore it through DATA INDEX
+    // and its verified LSK4L item; our own page commands never mark it operated.
+    const auto restore_page=mcdu2_operated_?parents.at(major_page(2)):McduPage::ident;
+    const auto command=sampler.tick(now,screen,usable,restore_page);
+    if(starting) {
+        if(sampler.crew_triggered()) {
+            detection_source_=trigger_source_;
+            if(sampler.crew_retry())detection_source_+=" retry "+std::to_string(sampler.crew_retry());
+        } else detection_source_="auto detect try "+std::to_string(++auto_attempts_);
+        if(log_event)log_event(detection_source_);
+        if(!sampler.busy()) {
+            const bool draft=screen.contains("TMPY")||screen.contains("TEMPY");
+            const bool input=!screen.scratchpad_empty();
+            finish_detection(std::string("fail (")+(draft&&input?"have draft / have input":draft?"have draft":"have input")+")");
+        }
+    }
+    if(!command.empty())send(command);
+    if(generation_seen_!=sampler.generation()) {
+        generation_seen_=sampler.generation();
+        automatic.observe(sampler.plan(),sampler.crew_triggered());
+    }
+    if(!detection_source_.empty()&&!sampler.busy()) {
+        const auto& plan=sampler.plan();
+        const bool success=plan.observed&&!plan.origin.airport.empty()&&!plan.destination.airport.empty();
+        finish_detection(success?"success":"fail ("+sampler.status()+")");
+    }
 }
 void McduFmsPort::clear(bool restore) {
     OANS_TRACE_SCOPE();
+    finish_detection("fail (disconnected)");
     if(restore&&ready()) {
         const auto page=sampler.saved_page();const auto command=sampler.cancel();
         if(!command.empty()) {
@@ -82,7 +159,8 @@ void McduFmsPort::clear(bool restore) {
             if(page==McduPage::init_b&&mcdu_page(s)==McduPage::init_a)send("SlewRight");
         }
     }
-    for(auto c:observed_)XPLMUnregisterCommandHandler(c,activity,1,this);
-    observed_.clear();pages_.clear();text_.clear();next_read_=0;sampler.reset();
+    for(const auto& c:observed_)XPLMUnregisterCommandHandler(c.first,activity,1,this);
+    observed_.clear();pages_.clear();text_.clear();next_read_=0;sampler.reset(false);
+    automatic=FmsAutoCapture{};generation_seen_=0;auto_attempts_=0;trigger_source_.clear();
 }
 }

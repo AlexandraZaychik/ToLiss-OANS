@@ -42,13 +42,21 @@ void fms_screen(const std::string& page) {
     };
     if(page=="IDENT"){put("titlew","A320-251N");put("label2w","ACTIVE NAV DATA BASE");put("label3w","SECOND NAV DATA BASE");}
     if(page=="DIR")put("titlew","DIR TO");
+    if(page=="INIT"){put("titlew","INIT");put("label1w","CO RTE");}
+    if(page=="PERF")put("titlew","TAKE OFF");
+    if(page=="PROG")put("titlew","A320 PROG");
+    if(page=="ATC")put("titlew","ATSU DATALINK");
+    if(page=="RADNAV")put("titlew","RADIO NAV");
+    if(page=="MENU")put("titlew","MCDU MENU");
+    if(page=="SEC")put("titlew","SEC INDEX");
+    if(page=="SUBPAGE")put("titlew","UNRECOGNIZED SUBPAGE");
     if(page=="DATA"){put("titlew","DATA INDEX");put("stitlew","1/2");put("cont4w","<A/C STATUS");}
     if(page=="FUEL") {
         put("titlew","FUEL PRED");put("cont1g",fms_destination.substr(0,4)+" 0000 0.0");
         put("cont2g",fms_alternate+" 0000 0.0");
     }
     if(page=="FPLN"){
-        put("stitlew","FROM");put("cont1g",fms_origin);put("label6w","DEST TIME DIST EFOB");put("cont6w",fms_destination+" 0038 213 11.4");
+        put("stitlew","FROM         CQH5482");put("cont1g",fms_origin);put("label6w","DEST TIME DIST EFOB");put("cont6w",fms_destination+" 0038 213 11.4");
     }
 }
 void fms_command(const std::string& name) {
@@ -57,6 +65,14 @@ void fms_command(const std::string& name) {
     if(name=="AirbusFBW/MCDU2Fpln")fms_screen("FPLN");
     if(name=="AirbusFBW/MCDU2Data")fms_screen("DATA");
     if(name=="AirbusFBW/MCDU2FuelPred")fms_screen("FUEL");
+    if(name=="AirbusFBW/MCDU2Init")fms_screen("INIT");
+    if(name=="AirbusFBW/MCDU2Perf")fms_screen("PERF");
+    if(name=="AirbusFBW/MCDU2Prog")fms_screen("PROG");
+    if(name=="AirbusFBW/MCDU2ATC")fms_screen("ATC");
+    if(name=="AirbusFBW/MCDU2RadNav")fms_screen("RADNAV");
+    if(name=="AirbusFBW/MCDU2Menu")fms_screen("MENU");
+    if(name=="AirbusFBW/MCDU2SecFpln")fms_screen("SEC");
+    if(name=="AirbusFBW/MCDU2Airport")fms_screen("FPLN");
     if(name=="AirbusFBW/MCDU2LSK4L"&&fms_page=="DATA")fms_screen("IDENT");
 }
 extern "C" {
@@ -84,6 +100,7 @@ __declspec(dllexport) void MockInitFms() {fms_enabled=true;fms_screen("IDENT");}
 __declspec(dllexport) void MockFmsPlan(const char* origin,const char* dest) {fms_origin=origin;fms_destination=dest;fms_screen(fms_page);}
 __declspec(dllexport) void MockFmsAlternate(const char* alternate) {fms_alternate=alternate;fms_screen(fms_page);}
 __declspec(dllexport) const char* MockFmsPage() {return fms_page.c_str();}
+__declspec(dllexport) void MockFmsSubpage() {fms_screen("SUBPAGE");}
 __declspec(dllexport) int MockResources() {return static_cast<int>(windows.size())+command_handlers+(loop?1:0)+(draw?1:0);}
 __declspec(dllexport) int MockMenuItems() {return static_cast<int>(menu_items.size());}
 __declspec(dllexport) const char* MockMenuLabel(int i) {return menu_items.at(i).first.c_str();}
@@ -110,6 +127,7 @@ XPLMDataRef XPLMFindDataRef(const char* name) {
     if(n.find("NDmode")!=std::string::npos)d.values[0]=2;
     if(n.find("acf_ICAO")!=std::string::npos)d.type=xplmType_Data;
     if(fms_enabled&&n.rfind("AirbusFBW/MCDU2",0)==0)d.type=xplmType_Data;
+    if(n=="AirbusFBW/ECAMFlightPhase")d.type=xplmType_Int;
     if(n=="sim/flightmodel/position/latitude")d.values[0]=30;
     if(n=="sim/flightmodel/position/longitude")d.values[0]=120.012;
     if(n=="sim/flightmodel/position/psi")d.values[0]=90;
