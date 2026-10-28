@@ -51,6 +51,7 @@ std::vector<unsigned char> raster_about_panel(const std::string& version) {
         label(34,343,@"THANKS / 致谢",12,muted,true);
         label(34,373,@"CHOXON2CHOXOFF",15,ink,true);label(227,375,@"(for awesome video)",13,muted);
         label(34,407,@"KILO_333167",15,ink,true);label(227,409,@"(for other plane config file)",13,muted);
+        label(34,435,@"heart4sck",15,ink,true);label(227,437,@"(for test on mac)",13,muted);
         [context flushGraphics];[NSGraphicsContext restoreGraphicsState];
         const unsigned char* data=[bitmap bitmapData];
         std::vector<unsigned char> pixels(data,data+width*height*4);

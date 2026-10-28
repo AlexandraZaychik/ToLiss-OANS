@@ -65,11 +65,11 @@ void automatic_tests() {
     a.update_phase(5,2);
     check(!a.request_due(5,false,false)&&!a.request_due(5,true,true),"power loss and busy transactions defer automatic request");
     check(a.request_due(5,true,false),"phase two starts automatic capture immediately");
-    check(!a.request_due(34.99,true,false)&&a.request_due(35,true,false),"automatic attempts are thirty seconds apart");
-    a.update_phase(36,0);
-    check(!a.request_due(65,true,false),"invalid new phase gates an overdue attempt");
-    a.update_phase(66,8);check(!a.request_due(66,true,false),"phase eight never starts automatic capture");
-    a.update_phase(67,4);check(a.request_due(67,true,false),"phase four permits an overdue capture");
+    check(!a.request_due(64.99,true,false)&&a.request_due(65,true,false),"automatic attempts are sixty seconds apart");
+    a.update_phase(66,0);
+    check(!a.request_due(125,true,false),"invalid new phase gates an overdue attempt");
+    a.update_phase(126,8);check(!a.request_due(126,true,false),"phase eight never starts automatic capture");
+    a.update_phase(127,4);check(a.request_due(127,true,false),"phase four permits an overdue capture");
     FmsPlan p;p.observed=true;p.origin.airport="ZUCK";
     a.observe(p);a.observe(p);
     check(!a.complete()&&a.confirmations()==0,"two identical origin-only samples do not latch");

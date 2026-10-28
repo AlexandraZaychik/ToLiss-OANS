@@ -51,6 +51,8 @@ inline std::vector<unsigned char> raster_about_panel(const std::string& version)
     label(227,375,L"(for awesome video)",13,muted);
     label(34,407,L"KILO_333167",15,ink,FW_SEMIBOLD);
     label(227,409,L"(for other plane config file)",13,muted);
+    label(34,435,L"heart4sck",15,ink,FW_SEMIBOLD);
+    label(227,437,L"(for test on mac)",13,muted);
     GdiFlush();
     const auto* data=static_cast<const unsigned char*>(bits);
     std::vector<unsigned char> pixels(data,data+width*height*4);

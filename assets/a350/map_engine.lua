@@ -3763,6 +3763,57 @@ function MAPX.draw_tower(C)
     DL.text(x-width/2,ty,MC.green,'TWR',cap)
 end
 
+-- Bundled source: ChartNavigation/resources/documents/wtc.json (fast-is-slow).
+-- Temporarily hide traffic metadata labels; retain their data and drawing code.
+local traffic_labels_enabled = false
+local traffic_wtc = {}
+function a350_load_wtc(path)
+    traffic_wtc = {}
+    local file = io.open(path, 'rb')
+    if not file then return end
+    local bytes = file:read('*a'); file:close()
+    -- This asset is a flat ICAO-designator -> category string map. Accept only
+    -- bounded designators and known categories; never execute asset contents.
+    for designator, category in bytes:gmatch('"([A-Z0-9]+)"%s*:%s*"([LMHJ])"') do
+        if #designator<=7 then traffic_wtc[designator]=category end
+    end
+end
+
+local function traffic_label(C, target, x, y)
+    local cap = TXT.small
+    local first = target[4] ~= '' and target[4] or '---'
+    local wake = traffic_wtc[target[6]] or '?'
+    local second = (target[5] >= 0 and tostring(target[5]) or '---') .. ' ' .. wake
+    local width = math.max(text_w(first,cap),text_w(second,cap))
+    local line = cap+2
+    local height = line+cap
+    -- Upright two-line labels: try either side, then above/below the symbol.
+    local candidates = {{x+10,y-height/2},{x-10-width,y-height/2},
+        {x-width/2,y-10-height},{x-width/2,y+10},
+        {x+10,y-10-height},{x-10-width,y-10-height},
+        {x+10,y+10},{x-10-width,y+10}}
+    for _, p in ipairs(candidates) do
+        local box = {p[1]-1,p[2]-1,p[1]+width+1,p[2]+height+1}
+        local clear = box[1]>=2 and box[3]<=298 and box[2]>=26 and box[4]<=C.map_bottom-2
+        if clear and C.Rr>0 then
+            for _, corner in ipairs({{box[1],box[2]},{box[3],box[2]},{box[1],box[4]},{box[3],box[4]}}) do
+                if (corner[1]-C.ax)^2+(corner[2]-C.ay)^2>(C.Rr-2)^2 then clear=false end
+            end
+        end
+        if clear then
+            for _, r in ipairs(C.placed) do
+                if box[1]<r[3] and box[3]>r[1] and box[2]<r[4] and box[4]>r[2] then clear=false;break end
+            end
+        end
+        if clear then
+            C.placed[#C.placed+1]=box
+            DL.text(p[1],p[2],MC.white,first,cap)
+            DL.text(p[1],p[2]+line,MC.white,second,cap)
+            return
+        end
+    end
+end
+
 function a350_render(cx, cy, scale, angle, ax, ay, lat, lon, psi, mag, mode, rng, crosses, flags, radius, bottom, fms_airport, fms_runway, alerts, blink, outside_plan, map_runway, traffic, position_valid, simple_stand_names, layer)
     GLB.n, GLB.cap = 0, 180000
     native_draw_reset()
@@ -3823,13 +3874,31 @@ function a350_render(cx, cy, scale, angle, ax, ay, lat, lon, psi, mag, mode, rng
     if layer ~= 1 then
     NDUI.compass(C)
     local ownship_scale = 0.8
-    if position_valid then
-        for _, target in ipairs(traffic or {}) do
+    for _, target in ipairs(traffic or {}) do
             local tx, ty = C.XY(G.W(target[1],target[2]))
             if tx > -20 and tx < 320 and ty > -20 and ty < 320 then
                 draw_plane(tx,ty,(target[3]-C.hv)*D2R,MC.white,ownship_scale*0.8)
             end
+    end
+    if traffic_labels_enabled and math.abs(rng-0.2)<0.0001 then
+        -- Dynamic-only rendering starts with an empty placed list. Reserve the
+        -- same host controls, all traffic symbols and the valid ownship first.
+        C.placed = {{0,0,300,25},{0,C.map_bottom,300,300},
+            {OANS_R[1]-2,OANS_R[2]-2,300,OANS_R[4]+2}}
+        if position_valid then
+            local px,py=C.XY(G.W(lat,lon))
+            C.placed[#C.placed+1]={px-9,py-9,px+9,py+9}
         end
+        for _, target in ipairs(traffic or {}) do
+            local x,y=C.XY(G.W(target[1],target[2]))
+            C.placed[#C.placed+1]={x-7,y-7,x+7,y+7}
+        end
+        for _, target in ipairs(traffic or {}) do
+            local x,y=C.XY(G.W(target[1],target[2]))
+            if x>0 and x<300 and y>25 and y<C.map_bottom then traffic_label(C,target,x,y) end
+        end
+    end
+    if position_valid then
         local px, py = C.XY(G.W(lat,lon))
         if px > -20 and px < 320 and py > -20 and py < 320 then
             draw_plane(px,py,(psi-C.hv)*D2R,MC.acft,ownship_scale)

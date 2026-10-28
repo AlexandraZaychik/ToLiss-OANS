@@ -22,7 +22,8 @@ std::vector<A350Traffic> filter_tcas_traffic(const std::vector<TcasTrafficSample
            !std::isfinite(s.psi)||!std::isfinite(s.speed_mps)||s.speed_mps<0||s.speed_mps>=max_speed||
            std::abs(s.lat)>90||std::abs(s.lon)>180)continue;
         if(length(local(s.lat,s.lon,own_lat,own_lon))>max_distance)continue;
-        result.push_back({s.slot,s.lat,s.lon,s.psi});
+        result.push_back({s.slot,s.lat,s.lon,s.psi,s.flight_id,s.icao_type,
+            std::isfinite(s.ground_speed_mps)&&s.ground_speed_mps>=0?int(std::lround(s.ground_speed_mps/kt)):-1});
     }
     return result;
 }
@@ -31,7 +32,7 @@ bool A350View::reusable_with(const A350View& o) const {
     if(traffic.size()!=o.traffic.size())return false;
     for(size_t i=0;i<traffic.size();++i) {
         const auto& a=traffic[i];const auto& b=o.traffic[i];
-        if(a.slot!=b.slot)return false;
+        if(a.slot!=b.slot||a.flight_id!=b.flight_id||a.icao_type!=b.icao_type||a.ground_speed_kt!=b.ground_speed_kt)return false;
         if(length(local(a.lat,a.lon,b.lat,b.lon))*scale+
            std::abs(std::remainder(a.psi-b.psi,360.0))*pi/180*16>=.05)return false;
     }
@@ -102,8 +103,10 @@ struct A350Map::Impl {
     void traffic(const std::vector<A350Traffic>& targets) {
         lua_createtable(L,static_cast<int>(targets.size()),0);
         int i=0;for(const auto& target:targets) {
-            lua_createtable(L,3,0);lua_pushnumber(L,target.lat);lua_rawseti(L,-2,1);
+            lua_createtable(L,6,0);lua_pushnumber(L,target.lat);lua_rawseti(L,-2,1);
             lua_pushnumber(L,target.lon);lua_rawseti(L,-2,2);lua_pushnumber(L,target.psi);lua_rawseti(L,-2,3);
+            string(target.flight_id);lua_rawseti(L,-2,4);lua_pushinteger(L,target.ground_speed_kt);lua_rawseti(L,-2,5);
+            string(target.icao_type);lua_rawseti(L,-2,6);
             lua_rawseti(L,-2,++i);
         }
     }
@@ -131,6 +134,7 @@ A350Map::A350Map(const std::filesystem::path& assets):p_(std::make_unique<Impl>(
     p.check(luaL_loadfile(L,(assets/"a350/map_engine.lua").u8string().c_str()));p.check(lua_pcall(L,0,0,0));
     OANS_TRACE("Lua a350_load_font begin");
     lua_getglobal(L,"a350_load_font");p.string((assets/"a350").u8string());p.check(lua_pcall(L,1,0,0));
+    lua_getglobal(L,"a350_load_wtc");p.string((assets/"wtc.json").u8string());p.check(lua_pcall(L,1,0,0));
     for(int on=0;on<2;++on) {
         lua_getglobal(L,"a350_oans_switch");lua_pushboolean(L,on);p.check(lua_pcall(L,1,5,0));
         auto& button=p.switches[on];p.draw_buffer.copy(L,button.vertices);

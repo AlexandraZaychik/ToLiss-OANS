@@ -37,6 +37,13 @@ foreach($name in @('src','tests','tools','scripts','vendor','assets','config','c
 foreach($name in @('CMakeLists.txt','config.ini','LICENSE','.gitignore')) {
     Copy-Item -LiteralPath (Join-Path $projectRoot $name) -Destination $devOutput -Force
 }
+# The developer export also needs the unmodified compression binaries for rebuilds.
+$sevenZipSource=Join-Path $projectRoot 'vendor/7zip'
+$sevenZipDev=Join-Path $devOutput 'vendor/7zip'
+New-Item -ItemType Directory -Force $sevenZipDev | Out-Null
+foreach($name in @('7z.exe','7z.dll','License.txt','SOURCE.txt')) {
+    Copy-Item -LiteralPath (Join-Path $sevenZipSource $name) -Destination $sevenZipDev -Force
+}
 Copy-Item -LiteralPath $notices -Destination (Join-Path $devOutput 'THIRD_PARTY_NOTICES.txt') -Force
 # Preserve provenance in a text file, keeping the requested output free of MD/reports.
 $provenance=Join-Path $projectRoot 'vendor/xptools/UPSTREAM.md'
@@ -63,6 +70,9 @@ New-Item -ItemType Directory -Force (Join-Path $pluginOutput '64') | Out-Null
 Copy-Item -LiteralPath (Join-Path $built '64/win.xpl') -Destination (Join-Path $pluginOutput '64/win.xpl') -Force
 Copy-Item -LiteralPath (Join-Path $built 'config.ini'),(Join-Path $built 'LICENSE') -Destination $pluginOutput -Force
 Copy-Item -LiteralPath $notices -Destination (Join-Path $pluginOutput 'THIRD_PARTY_NOTICES.txt') -Force
+    if($flavor -eq 'debug') {
+        & (Join-Path $PSScriptRoot 'build-log-collector.ps1') -CompilerDirectory $CompilerDirectory -Destination $pluginOutput
+    }
     @"
 ToLiss OANS $version - $flavor (Windows x86-64)
 Install exactly ONE package in the aircraft plugins folder. Do not install release and debug together.
@@ -70,6 +80,10 @@ Install exactly ONE package in the aircraft plugins folder. Do not install relea
 00_ToLissOANS-debug: troubleshooting only; slower and verbose, with debug symbols in 64/win.xpl.
 Before switching, move the other package out of plugins. Preserve your config.ini and custom config JSON files.
 Reproduce the problem with debug, then send detail.log, any detail.log.1/.2/.3 files, and X-Plane Log.txt.
+In the installed debug plugin folder, double-click CollectLogs.exe to collect root *.log / *.log.*,
+log/ and logs/ folders, and X-Plane Log.txt into ToLissOANS-logs-<timestamp>.7z beside the EXE.
+The collector uses bundled 7-Zip LZMA2 Ultra (-mx=9) solid compression and verifies the archive.
+Reproduce first; preferably exit X-Plane before collecting to capture its final log messages.
 Include X-Plane version, aircraft version, graphics driver and the exact action causing the crash.
 Logs contain local file paths. They append across sessions, rotate at 32 MiB, and keep four files total.
 Exception records are first-chance observations and can also come from the host or another plugin.

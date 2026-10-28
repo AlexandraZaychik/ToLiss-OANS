@@ -60,7 +60,6 @@ int main(int argc,char** argv) {
         const auto id_profile=package/"config"/(profile_id+".json");
         if(!failure_test) {std::filesystem::remove(base_profile);std::filesystem::remove(id_profile);}
         const auto log_path=package/"diagnostics.log";
-        const auto log_start=std::filesystem::exists(log_path)?std::filesystem::file_size(log_path):0;
         plugin=LoadLibraryExW(std::filesystem::u8path(argv[2]).c_str(),nullptr,LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR|LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
         check(plugin!=nullptr,"Windows loads actual .xpl binary and its imports");
         auto start=function<int(*)(char*,char*,char*)>(plugin,"XPluginStart");auto enable=function<int(*)()>(plugin,"XPluginEnable");
@@ -83,12 +82,20 @@ int main(int argc,char** argv) {
             const bool debug=std::filesystem::u8path(argv[2]).u8string().find("mock-host-debug")!=std::string::npos;
             check(text.find(debug?"build=debug":"build=release")!=std::string::npos,"detail.log identifies actual build flavor");
             check((text.find("ENTER]")!=std::string::npos)==debug,"only debug logs callback call chains");
+            check((text.find("DISPLAY] ND_INSTALL path=")!=std::string::npos&&
+                text.find("ND_INSTALL WARNING: unexpected plugin directory name")!=std::string::npos&&
+                text.find("ND_REGISTER callback_registered=1 final_visibility=UNVERIFIED")!=std::string::npos)==debug,
+                "only debug detail logs expose installation risk and callback registration without claiming visibility");
+            std::ifstream display_file(log_path);std::ostringstream display_text;display_text<<display_file.rdbuf();
+            check((display_text.str().find("ND_INSTALL WARNING:")!=std::string::npos&&
+                display_text.str().find("ND_REGISTER callback_registered=1")!=std::string::npos)==debug,
+                "only debug diagnostics.log records display installation and registration evidence");
             if(debug)check(text.find("Environment X-Plane=120000")!=std::string::npos&&text.find("DataRef bind")!=std::string::npos,"debug records simulator version and SDK binding breadcrumbs");
         }
         check(resources()==24,"4 windows, 18 OANS command handlers, loop and draw callback registered");
         auto menu_count=function<int(*)()>(mock,"MockMenuItems");auto menu_label=function<const char*(*)(int)>(mock,"MockMenuLabel");
         auto menu_click=function<void(*)(int)>(mock,"MockMenuClick");
-        check(menu_count()==14&&std::string(menu_label(0))=="Open Airport Map Window"&&std::string(menu_label(1))=="Test","map window, Test and Setting menu hierarchy registered");
+        check(menu_count()==15&&std::string(menu_label(0))=="Open Airport Map Window"&&std::string(menu_label(1))=="Test","map window, Test and Setting menu hierarchy registered");
         auto menu_checked=function<int(*)(int)>(mock,"MockMenuChecked");
         check(std::string(menu_label(2))=="Setting"&&std::string(menu_label(3))=="Stand name"&&std::string(menu_label(4))=="Simple"&&std::string(menu_label(5))=="Complex","stand name submenu labels");
         check(menu_checked(4)&&!menu_checked(5),"Simple is selected by default");
@@ -102,6 +109,7 @@ int main(int argc,char** argv) {
         {std::ifstream saved(package/"config.ini");std::ostringstream contents;contents<<saved.rdbuf();
          check(contents.str().find("stus_bar=1")!=std::string::npos&&contents.str().find("stand_name=complex")!=std::string::npos,"status row persists without overwriting stand setting");}
         menu_click(6);check(!menu_checked(6),"status row can be disabled");
+        check(std::string(menu_label(13))=="ADS-B IN"&&!menu_checked(13),"ADS-B IN defaults off");
         if(failure_test) {menu_click(4);throw std::runtime_error("EXPECTED_CLEANUP_REGRESSION");}
         // Cold cockpit: simulator coordinates exist, but the aircraft has no IRS position.
         set("AirbusFBW/CaptMAPAvail",0,0);set("AirbusFBW/CoMAPAvail",0,0);
@@ -118,6 +126,8 @@ int main(int argc,char** argv) {
         set("sim/cockpit2/tcas/targets/position/lon",1,120.0125);
         set("sim/cockpit2/tcas/targets/position/psi",1,90);
         set("sim/cockpit2/tcas/targets/position/V_msc",1,35);
+        set("sim/cockpit2/tcas/targets/position/vx",1,3);
+        set("sim/cockpit2/tcas/targets/position/vz",1,4);
         set("sim/cockpit2/tcas/targets/modeS_id",2,1002);
         set("sim/cockpit2/tcas/targets/position/lat",2,30.0003);
         set("sim/cockpit2/tcas/targets/position/lon",2,120.012);
@@ -133,8 +143,12 @@ int main(int argc,char** argv) {
         // Allow only the plugin's file worker to load the tiny test scenery.
         for(int i=0;i<250;++i) {advance(.1f);Sleep(5);}
         auto read=[](const std::filesystem::path& p) {std::ifstream in(p);std::ostringstream s;s<<in.rdbuf();return s.str();};
-        auto session_log=[&]() {std::ifstream in(log_path,std::ios::binary);in.seekg(static_cast<std::streamoff>(log_start));std::ostringstream s;s<<in.rdbuf();return s.str();};
+        auto session_log=[&]() {std::ifstream in(log_path,std::ios::binary);std::ostringstream s;s<<in.rdbuf();return s.str();};
         auto report=[&]() {cmd("toliss_oans/diagnostics");return read(package/"interfaces.txt");};
+        check((session_log().find("ND_DRAW health=NO_GAUGE_CALLBACK_YET")!=std::string::npos&&
+            read(package/"detail.log").find("DISPLAY] ND_DISPLAY side=0")!=std::string::npos)==
+            (std::filesystem::u8path(argv[2]).u8string().find("mock-host-debug")!=std::string::npos),
+            "only debug logs missing draw callbacks and ND blocking state without a manual report");
         check(report().find("OANS_EMPTY_MAP message=PLEASE WAIT\n")!=std::string::npos,
               "waiting for position or map data displays PLEASE WAIT");
         check(report().find("OANS_POSITION ready=0 pending=1 first_open=1 manual=0 airport=NONE requested=\n")!=std::string::npos,
@@ -143,11 +157,20 @@ int main(int argc,char** argv) {
         for(int i=0;i<60;++i) {advance(.1f);Sleep(2);}
         check(report().find("OANS_POSITION ready=0 pending=1 first_open=1 manual=0 airport=NONE requested=\n")!=std::string::npos,
               "electrical power alone does not confirm the first airport while MAP NOT AVAIL");
+        check(report().find("TCAS traffic_icons=0 ")!=std::string::npos,"ADS-B IN off suppresses targets");
+        menu_click(13);advance(.2f);
+        check(menu_checked(13)&&read(package/"config.ini").find("adsb_in=1")!=std::string::npos,"ADS-B IN enabled and persisted");
+        cmd("toliss_oans/reload");advance(.2f);
+        check(menu_checked(13)&&report().find("ADS_B_TARGET slot=1 flight=AFR2545 gs_kt=10 type=B77W")!=std::string::npos,
+              "ADS-B preference reloads and eight-byte metadata plus horizontal GS are read during alignment");
+        menu_click(13);
+        check(!menu_checked(13)&&report().find("TCAS traffic_icons=0 ")!=std::string::npos,"ADS-B IN off immediately clears targets");
+        menu_click(13);advance(.2f);
         set("AirbusFBW/CaptMAPAvail",0,1);set("AirbusFBW/CoMAPAvail",0,1);
         for(int i=0;i<40;++i) {advance(.1f);Sleep(2);}
         check(report().find("OANS_POSITION ready=0 pending=1 first_open=1 manual=0 airport=NONE requested=\n")!=std::string::npos&&
-              report().find("TCAS traffic_icons=0 ")!=std::string::npos,
-              "MAP AVAIL during an eight-minute IRS alignment cannot reveal ownship position or traffic");
+              report().find("TCAS traffic_icons=1 ")!=std::string::npos,
+              "MAP AVAIL during IRS alignment hides ownship but ADS-B traffic remains available");
         set("AirbusFBW/TimeToAlign",0,0);
         set("sim/flightmodel/position/latitude",0,0);set("sim/flightmodel/position/longitude",0,0);
         for(int i=0;i<20;++i) {advance(.1f);Sleep(2);}
@@ -329,8 +352,8 @@ int main(int argc,char** argv) {
         check(session_log().find("LOADED ZTEST Test Airport")!=std::string::npos,"ND DISPLAY AIRPORT loads selected canonical source");
         set("AirbusFBW/TimeToAlign",0,480);advance(.2f);
         check(report().find("OANS_POSITION ready=0 pending=0 first_open=0 manual=1 airport=ZTEST ")!=std::string::npos&&
-              report().find("TCAS traffic_icons=0 ")!=std::string::npos,
-              "manually selected airport remains browsable during alignment but aircraft position and traffic are invalid");
+              report().find("TCAS traffic_icons=1 ")!=std::string::npos,
+              "manually selected airport shows ADS-B traffic during alignment while ownship stays invalid");
         set("AirbusFBW/TimeToAlign",0,std::nan(""));advance(.2f);
         check(report().find("OANS_POSITION ready=0 ")!=std::string::npos,"invalid IRS alignment status cannot reveal positions");
         set("AirbusFBW/TimeToAlign",0,0);advance(.2f);
@@ -438,7 +461,9 @@ int main(int argc,char** argv) {
         for(int i=0;i<85;++i)advance(.1f);
         check(std::string(fms_page())=="IDENT"&&report().find("confirmations=1 complete=0")!=std::string::npos,
               "first automatic capture restores untouched MCDU2 to A/C STATUS");
-        for(int i=0;i<320;++i)advance(.1f);
+        // Automatic retries are spaced 60 seconds apart. Wait for completion
+        // rather than assuming the older 30-second retry interval.
+        for(int i=0;i<700;++i) {advance(.1f);if(i%10==0&&report().find("confirmations=2 complete=1")!=std::string::npos)break;}
         check(std::string(fms_page())=="IDENT"&&report().find("confirmations=2 complete=1")!=std::string::npos,
               "internal sampling commands never mark MCDU2 as operated");
         menu_click(12);menu_click(12);
@@ -481,7 +506,7 @@ int main(int argc,char** argv) {
         check(fms_report.find("alternate=ZALT ")!=std::string::npos,"actual .xpl reads alternate from FUEL PRED");
         check(fms_report.find("confirmations=1 complete=0")!=std::string::npos,"first automatic capture requires a second airport confirmation");
         check(fms_report.find("MCDU_MAJOR mcdu1=PERF mcdu2=DATA")!=std::string::npos,"sampler navigation does not overwrite crew major pages");
-        for(int i=0;i<320;++i)advance(.1f);
+        for(int i=0;i<700;++i) {advance(.1f);if(i%10==0&&report().find("confirmations=2 complete=1")!=std::string::npos)break;}
         check(report().find("confirmations=2 complete=1")!=std::string::npos,"second matching airport pair stops automatic capture");
         menu_click(12);menu_click(12);
         set("AirbusFBW/ECAMFlightPhase",0,5);
@@ -559,13 +584,13 @@ int main(int argc,char** argv) {
         int tl,tt,tr,tb;function<void(*)(int,int*,int*,int*,int*)>(mock,"MockWindowRect")(2,&tl,&tt,&tr,&tb);
         auto test_click=[&](int x,int y){pointer(2,1,tl+x,tb+y,0);pointer(2,3,tl+x,tb+y,0);};
         auto type=[&](const std::string& s){for(char c:s)key(c);};
-        check(tt-tb==470,"Test window has space for live OANS offset controls");
+        check(tt-tb==580,"Test window has space for two-axis OANS offset controls");
         test_click(490,366);type("-20");key(13);
         check(report().find("bounds=534,515,598,537 vertical_offset_px=-20")!=std::string::npos,"negative offset moves switch hit bounds up by twenty ND pixels");
-        type("30");key(13);
-        check(report().find("bounds=534,475,598,497 vertical_offset_px=20")!=std::string::npos,"offset input clamps at positive twenty and moves hit bounds down");
+        type("900");key(13);
+        check(report().find("bounds=534,-105,598,-83 vertical_offset_px=600")!=std::string::npos,"offset input clamps at six hundred for wide-area diagnosis");
         type("-");key(13);
-        check(report().find("vertical_offset_px=20")!=std::string::npos,"incomplete signed input preserves last valid offset");
+        check(report().find("vertical_offset_px=600")!=std::string::npos,"incomplete signed input preserves last valid offset");
         test_click(180,366);
         check(report().find("vertical_offset_px=-20")!=std::string::npos,"slider left endpoint selects minus twenty");
         pointer(2,1,tl+306,tb+366,0);pointer(2,2,tl+600,tb+366,0);pointer(2,3,tl+600,tb+366,0);
@@ -576,8 +601,20 @@ int main(int argc,char** argv) {
         click(560,499);
         check(report().find("OANS_switch side=0 visible=1 checked="+std::to_string(!checked_before_offset_click))!=std::string::npos,"shifted switch responds at its new projected click position");
         click(560,499);
+        test_click(490,496);type("-300");key(13);
+        check(report().find("bounds=234,488,298,510 vertical_offset_px=7 horizontal_offset_px=-300")!=std::string::npos,"horizontal input moves both switch bounds while retaining vertical offset");
+        const bool checked_before_xy_click=report().find("OANS_switch side=0 visible=1 checked=1")!=std::string::npos;
+        click(260,499);
+        check(report().find("OANS_switch side=0 visible=1 checked="+std::to_string(!checked_before_xy_click))!=std::string::npos,"two-axis shifted button uses matching projected hit bounds");
+        click(260,499);
+        test_click(60,448);test_click(260,448);
+        check(report().find("bounds=209,513,273,535 vertical_offset_px=-18 horizontal_offset_px=-325")!=std::string::npos,"left and up controls move twenty-five pixels");
+        test_click(160,448);test_click(360,448);
+        check(report().find("bounds=234,488,298,510 vertical_offset_px=7 horizontal_offset_px=-300")!=std::string::npos,"right and down controls reverse movement");
+        test_click(490,496);type("-999");key(13);
+        check(report().find("horizontal_offset_px=-600")!=std::string::npos,"horizontal input clamps negative offsets");
         test_click(490,316);
-        check(report().find("bounds=534,495,598,517 vertical_offset_px=0")!=std::string::npos,"reset restores the installed baseline layout");
+        check(report().find("bounds=534,495,598,517 vertical_offset_px=0 horizontal_offset_px=0")!=std::string::npos,"reset restores both axes to the installed baseline layout");
         test_click(250,246);type("ZTEST");key(9);type("9");key(13);
         check(report().find("RWY_AHEAD_TEST active=1 pending=0 steady=1")!=std::string::npos&&report().find("source=TEST")!=std::string::npos,"entered airport and runway enable test while aircraft stopped");
         for(int i=0;i<400;++i)advance(.1f);

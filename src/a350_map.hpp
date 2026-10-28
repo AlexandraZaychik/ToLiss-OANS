@@ -7,8 +7,10 @@ namespace oans {
 // Geometry and drawing use extracted A350 Lua with recorded host edits. This host
 // owns a private Lua state; it never accesses FlyWithLua's state or callbacks.
 struct A350Vertex {float x,y,u,v;std::uint32_t rgba;};
-struct TcasTrafficSample {int slot=0,mode_s_id=0;double lat=0,lon=0,psi=0,speed_mps=0;};
-struct A350Traffic {int slot=0;double lat=0,lon=0,psi=0;};
+struct TcasTrafficSample {int slot=0,mode_s_id=0;double lat=0,lon=0,psi=0,speed_mps=0;
+    std::string flight_id,icao_type;double ground_speed_mps=-1;};
+struct A350Traffic {int slot=0;double lat=0,lon=0,psi=0;
+    std::string flight_id,icao_type;int ground_speed_kt=-1;};
 std::vector<A350Traffic> filter_tcas_traffic(const std::vector<TcasTrafficSample>& samples,
                                              double own_lat,double own_lon);
 struct A350View {

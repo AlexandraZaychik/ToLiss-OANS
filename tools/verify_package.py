@@ -37,7 +37,11 @@ def verify(package, flavor):
     profile = json.loads((package / "config/a20n.json").read_text(encoding="utf-8"))
     assert set(profile) == {"nd_brightness", "pfd_brightness", "nd_uv", "pfd_uv", "nd_corners"}
     assert not list(package.rglob("XPLM_64.dll")), "Test mock SDK must never ship"
-    assert not list(package.rglob("*.exe")), "Offline test hosts must never ship with the aircraft plugin"
+    expected_exes = {'CollectLogs.exe', 'tools/7zip/7z.exe'} if is_debug else set()
+    assert {p.relative_to(package).as_posix() for p in package.rglob('*.exe')} == expected_exes, 'Unexpected helper or offline test host'
+    if is_debug:
+        for required in ('tools/7zip/7z.dll', 'tools/7zip/License.txt', 'tools/7zip/SOURCE.txt'):
+            assert (package / required).is_file(), f'Missing log collector dependency: {required}'
     assert sorted(p.relative_to(package).as_posix() for p in package.rglob('*.lua')) == ['assets/a350/map_engine.lua'], 'Only the extracted original A350 map engine is packaged'
     for required in ('assets/a350/LICENSE.txt', 'assets/a350/LUA_LICENSE.txt', 'assets/a350/provenance.json',
                      'assets/a350/A350_BTV_data/font_b612_px2.bin', 'assets/font_b612_OFL.txt'):

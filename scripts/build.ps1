@@ -104,6 +104,9 @@ try {
             }
         }
         $flavor.ToLowerInvariant() | Set-Content -LiteralPath (Join-Path $packageDir 'build-flavor.txt') -Encoding ascii
+        if($flavor -eq 'Debug') {
+            & (Join-Path $PSScriptRoot 'build-log-collector.ps1') -CompilerDirectory $CompilerDirectory -Destination $packageDir
+        }
         Write-Output "Built $flavor native plugin: $(Join-Path $packageDir '64\win.xpl')"
     }
 } finally { Pop-Location }

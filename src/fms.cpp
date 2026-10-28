@@ -10,7 +10,7 @@ void FmsAutoCapture::update_phase(double now,int phase) {
 }
 bool FmsAutoCapture::request_due(double now,bool usable,bool busy) {
     if(!capture_allowed()||!usable||busy||now<next_attempt_)return false;
-    next_attempt_=now+30;
+    next_attempt_=now+60;
     return true;
 }
 void FmsAutoCapture::observe(const FmsPlan& plan,bool crew_triggered) {

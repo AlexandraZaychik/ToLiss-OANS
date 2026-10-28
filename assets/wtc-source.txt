@@ -1,0 +1,6 @@
+Wake turbulence category lookup snapshot
+Source: https://github.com/Eyderoe/ChartNavigation/blob/fast-is-slow/resources/documents/wtc.json
+Retrieved: 2026-10-28
+SHA-256: 42afbf9b93cff08de8ef8fb0b8cad1670dd1d07785c40b44a82ef11ad31eec81
+2708 ICAO aircraft designators. Categories are used exactly as supplied (L/M/H).
+Unknown or missing designators display ?. No category is inferred.

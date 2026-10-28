@@ -1,0 +1,8 @@
+7-Zip 24.09 (Windows x64), unmodified 7z.exe and 7z.dll.
+Copyright (c) 1999-2024 Igor Pavlov.
+Copied from the existing local D:/7-Zip installation.
+License and redistribution terms: see License.txt in this directory.
+Official project: https://www.7-zip.org/
+Corresponding source: https://www.7-zip.org/a/7z2409-src.7z
+These standalone binaries are used only by the optional Windows debug log collector.
+The aircraft plugin does not load or depend on them.

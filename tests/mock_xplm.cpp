@@ -120,8 +120,13 @@ XPLMDataRef XPLMFindDataRef(const char* name) {
     if(n.find("matrix")!=std::string::npos) {d.values.resize(16);d.type=xplmType_FloatArray;}
     if(n=="sim/cockpit2/tcas/targets/modeS_id") {d.values.assign(64,0);d.type=xplmType_IntArray;}
     if(n=="sim/cockpit2/tcas/targets/position/lat"||n=="sim/cockpit2/tcas/targets/position/lon"||
-       n=="sim/cockpit2/tcas/targets/position/psi"||n=="sim/cockpit2/tcas/targets/position/V_msc") {
+       n=="sim/cockpit2/tcas/targets/position/psi"||n=="sim/cockpit2/tcas/targets/position/V_msc"||
+       n=="sim/cockpit2/tcas/targets/position/vx"||n=="sim/cockpit2/tcas/targets/position/vz") {
         d.values.assign(64,0);d.type=xplmType_FloatArray;
+    }
+    if(n=="sim/cockpit2/tcas/targets/flight_id"||n=="sim/cockpit2/tcas/targets/icao_type") {
+        d.type=xplmType_Data;d.bytes.assign(512,'\0');
+        d.bytes.replace(8,n.find("flight_id")!=std::string::npos?7:4,n.find("flight_id")!=std::string::npos?"AFR2545":"B77W");
     }
     if(n.find("MAPAvail")!=std::string::npos)d.values[0]=1;
     if(n.find("NDmode")!=std::string::npos)d.values[0]=2;

@@ -52,6 +52,48 @@ void test_stand_settings(const std::filesystem::path& assets) {
         throw std::runtime_error("Stand name mode did not update label geometry and invalidate render cache");
     view.simple_stand_names=true;
     if(!equal(simple,mixed->render(0,view)))throw std::runtime_error("Simple mode does not restore original label geometry");
+    {
+        auto v=view;v.position_valid=false;v.traffic={{1,v.lat,v.lon,90,"AFR2545","B77W",10}};
+        const auto production=mixed->render_dynamic(v);
+        v.traffic[0].flight_id="CES1234";v.traffic[0].icao_type="A320";v.traffic[0].ground_speed_kt=20;
+        if(!equal(production,mixed->render_dynamic(v)))throw std::runtime_error("Production traffic metadata labels must stay hidden");
+        auto empty=v;empty.traffic.clear();const auto plain=mixed->render_dynamic(empty);
+        if(colour_count(production,0xFFFFFFFF)-colour_count(plain,0xFFFFFFFF)!=36)
+            throw std::runtime_error("Hidden labels must retain only the traffic aircraft symbol");
+        std::cout<<"PASS production ADS-B labels hidden; traffic symbol remains during IRS alignment\n";
+        // Keep the retained label implementation covered using a test-only asset.
+        const auto label_assets=path/"label-assets";
+        std::filesystem::create_directories(label_assets);
+        std::filesystem::copy(assets/"a350",label_assets/"a350",std::filesystem::copy_options::recursive);
+        std::filesystem::copy_file(assets/"wtc.json",label_assets/"wtc.json");
+        const auto engine_path=label_assets/"a350/map_engine.lua";
+        std::ifstream engine_in(engine_path,std::ios::binary);std::ostringstream engine_text;engine_text<<engine_in.rdbuf();engine_in.close();
+        auto engine_source=engine_text.str();const std::string gate="local traffic_labels_enabled = false";
+        const auto gate_at=engine_source.find(gate);
+        if(gate_at==std::string::npos)throw std::runtime_error("Missing production label visibility gate");
+        engine_source.replace(gate_at,gate.size(),"local traffic_labels_enabled = true");
+        {std::ofstream out(engine_path,std::ios::binary);out<<engine_source;}
+        oans::IndexEntry entry;entry.file=path/"mixed.dat";entry.icao="ZSTD";
+        oans::A350Map label_map(label_assets,entry);
+        v.traffic={{1,v.lat,v.lon,90,"AFR2545","B77W",10}};
+        const auto labelled=label_map.render_dynamic(v);
+        v.traffic[0].icao_type="B744";
+        if(!equal(labelled,label_map.render_dynamic(v)))throw std::runtime_error("Same H wake class should produce identical label glyphs");
+        v.traffic[0].icao_type="A320";
+        const auto medium=label_map.render_dynamic(v);
+        if(equal(labelled,medium))throw std::runtime_error("H to M lookup must update actual label glyphs");
+        v.traffic[0].flight_id="CES1234";
+        const auto callsign=label_map.render_dynamic(v);
+        if(equal(medium,callsign))throw std::runtime_error("Callsign-only update must invalidate cached label");
+        v.traffic[0].ground_speed_kt=20;
+        if(equal(callsign,label_map.render_dynamic(v)))throw std::runtime_error("GS-only update must invalidate cached label");
+        v.traffic[0].flight_id="";v.traffic[0].icao_type="UNKNOWN";v.traffic[0].ground_speed_kt=-1;
+        const auto unknown=label_map.render_dynamic(v);
+        if(unknown.empty()||equal(unknown,labelled))throw std::runtime_error("Missing metadata must draw fallback glyphs");
+        v.range=.5;const auto symbols=label_map.render_dynamic(v);
+        if(unknown.size()<=symbols.size())throw std::runtime_error("Only 0.2 NM may add traffic label glyphs");
+        std::cout<<"PASS ADS-B labels: 0.2 NM only, flight ID, horizontal GS, bundled H/M wake lookup, missing metadata and cache updates\n";
+    }
     for(const auto& names:std::vector<std::pair<std::string,std::string>>{
         {"M21","M21"},{"ABC1234","ABC1234"},{"ABCD1234","ABCD1234"},
         {u8"机位M1234",u8"机位M1234"},{u8"机位MN1234",u8"机位MN1234"},
@@ -380,7 +422,7 @@ int main(int argc,char** argv) {
         const auto selected=oans::filter_tcas_traffic(samples,view.lat,view.lon);
         if(selected.size()!=2||selected[0].slot!=1||selected[1].slot!=2)
             throw std::runtime_error("TCAS filter must keep only valid non-ownship targets within 1 NM and below 80 kt");
-        auto traffic_view=view;traffic_view.traffic=selected;
+        auto traffic_view=view;traffic_view.range=.5;traffic_view.traffic=selected;
         const auto& traffic_vertices=engine.render(2,traffic_view);
         const auto white_delta=static_cast<long long>(colour_count(traffic_vertices,0xFFFFFFFF))-
                               static_cast<long long>(colour_count(vertices,0xFFFFFFFF));
@@ -392,18 +434,25 @@ int main(int argc,char** argv) {
         traffic_path.replace_filename(traffic_path.stem().string()+"-traffic.bin");
         write_buffer(traffic_path,traffic_vertices);
         const auto traffic_vertex_count=traffic_vertices.size();
+        auto label_view=view;label_view.range=.2;label_view.scale=view.scale*view.range/.2;
+        label_view.position_valid=false;
+        const auto label_position=geo_offset(60,30);
+        label_view.traffic={{1,label_position.lat,label_position.lon,view.psi+90,"AFR2545","B77W",58}};
+        auto label_path=std::filesystem::u8path(argv[4]);
+        label_path.replace_filename(label_path.stem().string()+"-adsb-labels.bin");
+        write_buffer(label_path,engine.render(1,label_view));
         auto hidden_view=traffic_view;hidden_view.position_valid=false;
         const auto hidden=engine.render(2,hidden_view);
         if(colour_count(vertices,0xFFFF5AFF)==0||colour_count(hidden,0xFFFF5AFF)!=0)
             throw std::runtime_error("Unavailable position must remove the actual magenta ownship geometry");
         auto hidden_without_traffic=hidden_view;hidden_without_traffic.traffic.clear();
         const auto hidden_plain=engine.render(2,hidden_without_traffic);
-        if(hidden.size()!=hidden_plain.size()||colour_count(hidden,0xFFFFFFFF)!=colour_count(hidden_plain,0xFFFFFFFF))
-            throw std::runtime_error("Unavailable position must suppress traffic even if stale targets reach Lua");
+        if(colour_count(hidden,0xFFFFFFFF)-colour_count(hidden_plain,0xFFFFFFFF)!=selected.size()*36)
+            throw std::runtime_error("Unavailable ownship position must retain ADS-B traffic geometry");
         const auto& restored=engine.render(2,traffic_view);
         if(colour_count(restored,0xFFFF5AFF)!=colour_count(vertices,0xFFFF5AFF)||restored.size()!=traffic_vertex_count)
             throw std::runtime_error("Position validity changes must invalidate cached hidden aircraft symbols");
-        std::cout<<"PASS unavailable position hides ownship and traffic in production Lua, including cached valid/invalid transitions\n";
+        std::cout<<"PASS unavailable position hides ownship and retains ADS-B traffic in production Lua, including cache transitions\n";
         const auto cached=engine.render(0,view).data();
         if(cached!=vertices.data())throw std::runtime_error("View cache miss");
         const auto before_jitter=engine.cache_stats(0);

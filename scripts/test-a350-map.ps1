@@ -27,5 +27,7 @@ try {
     if($LASTEXITCODE -ne 0){throw 'Actual A350 triangle buffer WGL render failed'}
     & 'build/render_a350_buffer.exe' ($output+'-traffic.bin') 'assets/font_b612_px2.bin' ($output+'-traffic.bmp')
     if($LASTEXITCODE -ne 0){throw 'Offline TCAS symbol render failed'}
+    & 'build/render_a350_buffer.exe' ($output+'-adsb-labels.bin') 'assets/font_b612_px2.bin' ($output+'-adsb-labels.bmp')
+    if($LASTEXITCODE -ne 0){throw 'Offline ADS-B label render failed'}
     Write-Output ('Offline renders only, NOT X-Plane screenshots: '+$output+'.bmp and '+$output+'-traffic.bmp')
 } finally {Pop-Location}
