@@ -25,7 +25,7 @@ inline std::string mac_post_overpass(const char* host,const std::string& body) {
     const std::string url=std::string("https://")+host+"/api/interpreter";
     char error[CURL_ERROR_SIZE]={};auto* handle=request.get();
     curl_easy_setopt(handle,CURLOPT_URL,url.c_str());
-    curl_easy_setopt(handle,CURLOPT_USERAGENT,"ToLissOANS/0.4.36 airport-map");
+    curl_easy_setopt(handle,CURLOPT_USERAGENT,"ToLissOANS/0.4.37 airport-map");
     curl_easy_setopt(handle,CURLOPT_POSTFIELDS,body.c_str());
     curl_easy_setopt(handle,CURLOPT_POSTFIELDSIZE_LARGE,static_cast<curl_off_t>(body.size()));
     curl_easy_setopt(handle,CURLOPT_NOSIGNAL,1L);

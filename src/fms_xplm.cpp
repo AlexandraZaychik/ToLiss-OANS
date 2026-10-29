@@ -39,7 +39,10 @@ int McduFmsPort::activity(XPLMCommandRef command,XPLMCommandPhase phase,void* pt
                            (parent=="F-PLN"&&key.key=="LSK6R");
             if(request_sample)p.trigger_source_="trigger detect "+parent+" "+key.key;
         }
-        if(p.sampler.busy())p.finish_detection("fail (crew interrupted)");
+        if(p.sampler.busy()) {
+            p.refresh_phase(XPLMGetElapsedTime());
+            p.finish_detection("fail (crew interrupted)");
+        }
         p.sampler.activity(XPLMGetElapsedTime(),request_sample);
         if(phase==xplm_CommandBegin&&it!=p.observed_.end()&&!it->second.major.empty()) {
             p.major_pages_[it->second.unit-1]=it->second.major;
@@ -93,16 +96,18 @@ void McduFmsPort::bind_activity() {
         }
     }
 }
+void McduFmsPort::refresh_phase(double now) {
+    // Resolve again: a missing provider may appear after initialization.
+    // Refresh during transactions too, so publication/interruption uses the current phase.
+    auto ref=XPLMFindDataRef("AirbusFBW/ECAMFlightPhase");
+    const int phase=ref&&(XPLMGetDataRefTypes(ref)&xplmType_Int)?XPLMGetDatai(ref):0;
+    automatic.update_phase(now,phase);
+    sampler.set_flight_phase(automatic.phase());
+}
 void McduFmsPort::tick(double now,bool usable) {
     OANS_TRACE_SCOPE();
     if(!ready())return;
-    if(automatic.phase_due(now)) {
-        // Resolve again on each scheduled read: a missing provider may appear
-        // after aircraft initialization. Invalid/missing phases use a 5s retry.
-        auto ref=XPLMFindDataRef("AirbusFBW/ECAMFlightPhase");
-        const int phase=ref&&(XPLMGetDataRefTypes(ref)&xplmType_Int)?XPLMGetDatai(ref):0;
-        automatic.update_phase(now,phase);
-    }
+    if(automatic.phase_due(now)||sampler.wants_screen(now))refresh_phase(now);
     if(!automatic.capture_allowed())sampler.stop_automatic_capture();
     if(automatic.request_due(now,usable,sampler.busy()))sampler.request();
     McduScreen screen;
@@ -137,11 +142,10 @@ void McduFmsPort::tick(double now,bool usable) {
     if(!command.empty())send(command);
     if(generation_seen_!=sampler.generation()) {
         generation_seen_=sampler.generation();
-        automatic.observe(sampler.plan(),sampler.crew_triggered());
+        automatic.observe(sampler.complete_pair()?sampler.sampled_plan():FmsPlan{});
     }
     if(!detection_source_.empty()&&!sampler.busy()) {
-        const auto& plan=sampler.plan();
-        const bool success=plan.observed&&!plan.origin.airport.empty()&&!plan.destination.airport.empty();
+        const bool success=sampler.complete_pair();
         finish_detection(success?"success":"fail ("+sampler.status()+")");
     }
 }

@@ -50,7 +50,7 @@
 
 using namespace oans;
 namespace {
-constexpr const char* version="0.4.36";
+constexpr const char* version="0.4.37";
 constexpr float white[3]={1,1,1},cyan[3]={.20f,.90f,1},green[3]={0,1,0},amber[3]={1,.65f,0};
 constexpr float taxi_yellow[3]={.95f,.83f,0},magenta[3]={1,.35f,1};
 AtlasFont map_font;
@@ -373,7 +373,7 @@ std::string form_encode(const std::string& input) {
 #ifdef _WIN32
 std::string post_overpass(const char* host,const std::string& body) {
     const std::wstring wide_host(host,host+std::strlen(host));
-    WinHttpHandle session{WinHttpOpen(L"ToLissOANS/0.4.36 airport-map",WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+    WinHttpHandle session{WinHttpOpen(L"ToLissOANS/0.4.37 airport-map",WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
                                       WINHTTP_NO_PROXY_NAME,WINHTTP_NO_PROXY_BYPASS,0)};
     if(!session.value)throw std::runtime_error(winhttp_error("WinHttpOpen"));
     if(!WinHttpSetTimeouts(session.value,10000,10000,20000,45000))
@@ -2065,7 +2065,7 @@ void create_ui() {
     update_cursor_menu();
     mcdu2_auto_item=XPLMAppendMenuItem(settings_menu,"auto info from mcdu2",reinterpret_cast<void*>(std::intptr_t(28)),0);
     XPLMCheckMenuItem(settings_menu,mcdu2_auto_item,config.fms?xplm_Menu_Checked:xplm_Menu_Unchecked);
-    adsb_in_item=XPLMAppendMenuItem(settings_menu,"ADS-B IN",reinterpret_cast<void*>(std::intptr_t(29)),0);
+    adsb_in_item=XPLMAppendMenuItem(settings_menu,"show traffic",reinterpret_cast<void*>(std::intptr_t(29)),0);
     XPLMCheckMenuItem(settings_menu,adsb_in_item,config.adsb_in?xplm_Menu_Checked:xplm_Menu_Unchecked);
     XPLMAppendMenuItem(menu,"About",reinterpret_cast<void*>(std::intptr_t(23)),0);
 }

@@ -8,7 +8,7 @@
 
 namespace oans {
 // Shared by the plugin and offline preview. Top-down BGRA, rendered at 2x.
-constexpr int about_width=560,about_height=460,about_scale=2;
+constexpr int about_width=560,about_height=500,about_scale=2;
 #ifdef __APPLE__
 std::vector<unsigned char> raster_about_panel(const std::string& version);
 #else
@@ -34,11 +34,11 @@ inline std::vector<unsigned char> raster_about_panel(const std::string& version)
         SelectObject(dc,old_font);DeleteObject(font);
     };
     const COLORREF ink=RGB(233,239,246),muted=RGB(146,160,180),mint=RGB(125,228,194);
-    fill(0,0,560,460,RGB(19,26,37));
+    fill(0,0,about_width,about_height,RGB(19,26,37));
     fill(32,34,28,3,mint);
     label(32,51,L"ToLiss OANS",32,ink,FW_SEMIBOLD);
     label(433,67,L"v"+std::wstring(version.begin(),version.end()),13,muted);
-    label(34,105,L"Eyderoe (GPT)",16,ink);
+    label(34,105,L"Eyderoe\u3001GPT*",16,ink);
     label(34,133,L"GPLv3  /  Open source",13,muted);
     fill(32,178,496,83,RGB(28,49,52));
     fill(32,178,3,83,mint);
@@ -53,6 +53,8 @@ inline std::vector<unsigned char> raster_about_panel(const std::string& version)
     label(227,409,L"(for other plane config file)",13,muted);
     label(34,435,L"heart4sck",15,ink,FW_SEMIBOLD);
     label(227,437,L"(for test on mac)",13,muted);
+    label(34,469,L"ricardo404",15,ink,FW_SEMIBOLD);
+    label(227,471,L"(for improve)",13,muted);
     GdiFlush();
     const auto* data=static_cast<const unsigned char*>(bits);
     std::vector<unsigned char> pixels(data,data+width*height*4);

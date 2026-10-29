@@ -109,7 +109,7 @@ int main(int argc,char** argv) {
         {std::ifstream saved(package/"config.ini");std::ostringstream contents;contents<<saved.rdbuf();
          check(contents.str().find("stus_bar=1")!=std::string::npos&&contents.str().find("stand_name=complex")!=std::string::npos,"status row persists without overwriting stand setting");}
         menu_click(6);check(!menu_checked(6),"status row can be disabled");
-        check(std::string(menu_label(13))=="ADS-B IN"&&!menu_checked(13),"ADS-B IN defaults off");
+        check(std::string(menu_label(13))=="show traffic"&&!menu_checked(13),"show traffic defaults off");
         if(failure_test) {menu_click(4);throw std::runtime_error("EXPECTED_CLEANUP_REGRESSION");}
         // Cold cockpit: simulator coordinates exist, but the aircraft has no IRS position.
         set("AirbusFBW/CaptMAPAvail",0,0);set("AirbusFBW/CoMAPAvail",0,0);
@@ -459,13 +459,13 @@ int main(int argc,char** argv) {
         menu_click(12);menu_click(12);
         set("AirbusFBW/ECAMFlightPhase",0,2);
         for(int i=0;i<85;++i)advance(.1f);
-        check(std::string(fms_page())=="IDENT"&&report().find("confirmations=1 complete=0")!=std::string::npos,
+        check(std::string(fms_page())=="IDENT"&&report().find("confirmations=1 complete=1")!=std::string::npos,
               "first automatic capture restores untouched MCDU2 to A/C STATUS");
-        // Automatic retries are spaced 60 seconds apart. Wait for completion
-        // rather than assuming the older 30-second retry interval.
-        for(int i=0;i<700;++i) {advance(.1f);if(i%10==0&&report().find("confirmations=2 complete=1")!=std::string::npos)break;}
-        check(std::string(fms_page())=="IDENT"&&report().find("confirmations=2 complete=1")!=std::string::npos,
-              "internal sampling commands never mark MCDU2 as operated");
+        fms_plan("ZBAA","ZSSS");
+        for(int i=0;i<700;++i)advance(.1f);
+        check(std::string(fms_page())=="IDENT"&&report().find("origin=ZUCK departure_runway=02L destination=ZUUU")!=std::string::npos,
+              "one complete automatic capture stops later sixty-second attempts");
+        fms_plan("ZUCK02L","ZUUU02L");
         menu_click(12);menu_click(12);
         set("AirbusFBW/ECAMFlightPhase",0,1);
         advance(.1f); // Rebind the observers after re-enabling sampling.
@@ -492,10 +492,10 @@ int main(int argc,char** argv) {
         check(report().find("confirmations=1 complete=1")!=std::string::npos,"one full selected-key capture completes automatic session in phase one");
         set("AirbusFBW/ECAMFlightPhase",0,2);
         for(int i=0;i<400;++i)advance(.1f);
-        check(report().find("ecam_phase=1 confirmations=1 complete=1")!=std::string::npos,"crew completion stops phase polling and automatic recapture");
+        check(report().find("ecam_phase=2 confirmations=1 complete=1")!=std::string::npos,"crew completion preserves phase tracking while stopping automatic recapture");
         cmd("AirbusFBW/MCDU1Perf");
         // Start a fresh capture
-        // session so the existing automatic-confirmation checks stay isolated.
+        // session so the automatic capture checks stay isolated.
         menu_click(12);menu_click(12);
         set("AirbusFBW/ECAMFlightPhase",0,2);
         for(int i=0;i<85;++i)advance(.1f);
@@ -504,10 +504,27 @@ int main(int argc,char** argv) {
         check(row(0).find("not_in_plan=1")!=std::string::npos,"native selected ZTEST is outside observed ZUCK to ZUUU plan");
         check(std::string(fms_page())=="DATA","actual .xpl restores DATA parent from A/C STATUS subpage");
         check(fms_report.find("alternate=ZALT ")!=std::string::npos,"actual .xpl reads alternate from FUEL PRED");
-        check(fms_report.find("confirmations=1 complete=0")!=std::string::npos,"first automatic capture requires a second airport confirmation");
+        check(fms_report.find("confirmations=1 complete=1")!=std::string::npos,"first full automatic capture completes the session");
         check(fms_report.find("MCDU_MAJOR mcdu1=PERF mcdu2=DATA")!=std::string::npos,"sampler navigation does not overwrite crew major pages");
-        for(int i=0;i<700;++i) {advance(.1f);if(i%10==0&&report().find("confirmations=2 complete=1")!=std::string::npos)break;}
-        check(report().find("confirmations=2 complete=1")!=std::string::npos,"second matching airport pair stops automatic capture");
+        set("AirbusFBW/ECAMFlightPhase",0,5);
+        fms_plan("ZBAA18R","ZSSS36L");cmd("AirbusFBW/MCDU1Init");cmd("AirbusFBW/MCDU1LSK1R");
+        for(int i=0;i<85;++i)advance(.1f);
+        check(report().find("origin=ZUCK departure_runway=02L destination=ZSSS arrival_runway=36L")!=std::string::npos,
+              "phase five is refreshed before crew capture and freezes the existing origin after auto completion");
+        fms_plan("ZUCK02L","");
+        menu_click(12);menu_click(12);set("AirbusFBW/ECAMFlightPhase",0,2);
+        for(int i=0;i<85;++i)advance(.1f);
+        check(report().find("origin=ZUCK departure_runway=02L destination= arrival_runway=")!=std::string::npos&&
+              report().find("confirmations=0 complete=0")!=std::string::npos,"automatic origin-only capture publishes its available half");
+        fms_plan("PPOS","ZUUU02L");
+        for(int i=0;i<650;++i)advance(.1f);
+        check(report().find("origin=ZUCK departure_runway=02L destination=ZUUU arrival_runway=02L")!=std::string::npos&&
+              report().find("confirmations=0 complete=0")!=std::string::npos,"automatic sixty-second retry publishes destination without treating cached halves as a full capture");
+        fms_plan("ZUCK02L","ZUUU02L");
+        set("AirbusFBW/ECAMFlightPhase",0,5);
+        for(int i=0;i<650;++i)advance(.1f);
+        check(report().find("confirmations=0 complete=0")!=std::string::npos,
+              "phase five suppresses overdue automatic retries after partial captures");
         menu_click(12);menu_click(12);
         set("AirbusFBW/ECAMFlightPhase",0,5);
         for(int i=0;i<85;++i)advance(.1f);
@@ -519,8 +536,10 @@ int main(int argc,char** argv) {
         check(std::string(fms_page())=="DATA"&&report().find("observed=0")!=std::string::npos,
               "selected-key capture waits five seconds even when phase five blocks automatic capture");
         for(int i=0;i<40;++i)advance(.1f);
-        check(report().find("origin=ZUCK departure_runway=02L destination=ZUUU arrival_runway=02L")!=std::string::npos,
-              "phase five still permits selected-key capture");
+        check(report().find("origin= departure_runway= destination=ZUUU arrival_runway=02L")!=std::string::npos,
+              "phase five permits destination capture without filling an initially empty origin");
+        set("AirbusFBW/ECAMFlightPhase",0,2);menu_click(12);menu_click(12);
+        for(int i=0;i<85;++i)advance(.1f);
         auto fms_alternate=function<void(*)(const char*)>(mock,"MockFmsAlternate");
         project();cmd("toliss_oans/capt_airport");click(550,19);
         for(int i=0;i<40;++i) {advance(.1f);Sleep(2);}

@@ -31,6 +31,7 @@ private:
     unsigned auto_attempts_=0;
     std::string trigger_source_,detection_source_;
     McduScreen read() const;
+    void refresh_phase(double now);
     void send(const std::string& suffix);
     void finish_detection(const std::string& result);
     static int activity(XPLMCommandRef,XPLMCommandPhase,void*);

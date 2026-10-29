@@ -41,10 +41,10 @@ std::vector<unsigned char> raster_about_panel(const std::string& version) {
                 context:nil];
         };
         NSColor* ink=color(233,239,246);NSColor* muted=color(146,160,180);NSColor* mint=color(125,228,194);
-        fill(0,0,560,460,color(19,26,37));fill(32,34,28,3,mint);
+        fill(0,0,about_width,about_height,color(19,26,37));fill(32,34,28,3,mint);
         label(32,51,@"ToLiss OANS",32,ink,true);
         label(433,67,[NSString stringWithFormat:@"v%s",version.c_str()],13,muted);
-        label(34,105,@"Eyderoe (GPT)",16,ink);label(34,133,@"GPLv3  /  Open source",13,muted);
+        label(34,105,@"Eyderoe、GPT*",16,ink);label(34,133,@"GPLv3  /  Open source",13,muted);
         fill(32,178,496,83,color(28,49,52));fill(32,178,3,83,mint);
         label(52,190,@"FREE PLUGIN",22,mint,true);label(53,225,@"免费插件",17,color(193,223,214));
         label(34,283,@"You might find it on GitHub.",14,muted);fill(32,326,496,1,color(47,58,74));
@@ -52,6 +52,7 @@ std::vector<unsigned char> raster_about_panel(const std::string& version) {
         label(34,373,@"CHOXON2CHOXOFF",15,ink,true);label(227,375,@"(for awesome video)",13,muted);
         label(34,407,@"KILO_333167",15,ink,true);label(227,409,@"(for other plane config file)",13,muted);
         label(34,435,@"heart4sck",15,ink,true);label(227,437,@"(for test on mac)",13,muted);
+        label(34,469,@"ricardo404",15,ink,true);label(227,471,@"(for improve)",13,muted);
         [context flushGraphics];[NSGraphicsContext restoreGraphicsState];
         const unsigned char* data=[bitmap bitmapData];
         std::vector<unsigned char> pixels(data,data+width*height*4);

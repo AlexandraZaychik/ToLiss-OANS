@@ -13,16 +13,14 @@ bool FmsAutoCapture::request_due(double now,bool usable,bool busy) {
     next_attempt_=now+60;
     return true;
 }
-void FmsAutoCapture::observe(const FmsPlan& plan,bool crew_triggered) {
+void FmsAutoCapture::observe(const FmsPlan& plan) {
     if(complete_)return;
-    // Both airports must be present: two identical partial/empty pages must
-    // not stop retries while a datalink plan is still being populated.
+    // One verified transaction must contain both airports. Cached halves from
+    // different transactions must not stop retries during datalink loading.
     if(!plan.observed||plan.origin.airport.empty()||plan.destination.airport.empty()) {
-        confirmations_=0;origin_.clear();destination_.clear();return;
+        confirmations_=0;return;
     }
-    if(origin_==plan.origin.airport&&destination_==plan.destination.airport)++confirmations_;
-    else {origin_=plan.origin.airport;destination_=plan.destination.airport;confirmations_=1;}
-    complete_=crew_triggered||confirmations_>=2;
+    confirmations_=1;complete_=true;
 }
 bool airport_outside_active_plan(const FmsPlan& plan,const std::string& airport) {
     return plan.observed&&!airport.empty()&&
@@ -136,7 +134,9 @@ bool parse_fuel_pred(const McduScreen& s,FmsPlan& p) {
     p.alternate=e.airport;return true;
 }
 void FmsSampler::invalidate(const std::string& why) {
-    plan_={};plan_.reason=why;sampled_=-1;++generation_;
+    const auto origin=flight_phase_>=5?plan_.origin:FmsEndpoint{};
+    plan_={};plan_.origin=origin;plan_.observed=!origin.airport.empty();
+    plan_.reason=why;complete_pair_=false;sampled_=-1;++generation_;
 }
 void FmsSampler::reset(bool initial_sample){*this=FmsSampler{initial_sample};}
 void FmsSampler::activity(double now,bool request_sample) {
@@ -179,6 +179,7 @@ std::string FmsSampler::tick(double now,const McduScreen& s,bool usable,McduPage
     if(stage_==Stage::idle) {
         if(!requested_||now<next_||now-last_activity_<crew_idle_seconds)return "";
         requested_=false;
+        complete_pair_=false;
         sampling_from_crew_=requested_by_crew_;requested_by_crew_=false;
         sampling_retry_=sampling_from_crew_?crew_retries_:0;
         if(!s.scratchpad_empty()||s.contains("TMPY")||s.contains("TEMPY")){status_="MCDU BUSY";finish_crew_attempt(now,false);return "";}
@@ -256,10 +257,19 @@ std::string FmsSampler::tick(double now,const McduScreen& s,bool usable,McduPage
         } else if(saved_==McduPage::airport? page!=McduPage::fpln : page!=saved_)return "";
     }
     if((stage_==Stage::ident_wait&&page!=McduPage::ident)||(stage_==Stage::init_b_wait&&page!=McduPage::init_b))return "";
-    if(pending_valid_) {plan_=pending_;sampled_=now;++generation_;status_=plan_.reason;}
+    if(pending_valid_) {
+        complete_pair_=!pending_.origin.airport.empty()&&!pending_.destination.airport.empty();
+        const bool has_airport=!pending_.origin.airport.empty()||!pending_.destination.airport.empty();
+        auto published=pending_;
+        if(flight_phase_>=5||(has_airport&&published.origin.airport.empty()))published.origin=plan_.origin;
+        if(has_airport&&published.destination.airport.empty()) {
+            published.destination=plan_.destination;published.alternate=plan_.alternate;
+        }
+        plan_=published;sampled_=now;++generation_;status_=plan_.reason;
+    }
     // Publish only after the saved page has been restored and verified.
     pending_valid_=false;stage_=Stage::idle;
-    finish_crew_attempt(now,plan_.observed&&!plan_.origin.airport.empty()&&!plan_.destination.airport.empty());
+    finish_crew_attempt(now,complete_pair_);
     return "";
 }
 }

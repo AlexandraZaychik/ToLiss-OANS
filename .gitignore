@@ -4,6 +4,7 @@
 /backups/
 __pycache__/
 *.log
+.idea/
 
 # Downloaded installers and duplicate source archives
 *.zip

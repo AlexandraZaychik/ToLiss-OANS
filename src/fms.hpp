@@ -29,11 +29,11 @@ bool airport_outside_active_plan(const FmsPlan& plan,const std::string& airport)
 // transactions remain independent of phase gating and the completion latch.
 class FmsAutoCapture {
 public:
-    bool phase_due(double now) const {return !complete_&&now>=next_phase_;}
+    bool phase_due(double now) const {return now>=next_phase_;}
     void update_phase(double now,int phase);
     bool request_due(double now,bool usable,bool busy);
     bool capture_allowed() const {return !complete_&&phase_>=2&&phase_<5;}
-    void observe(const FmsPlan& plan,bool crew_triggered=false);
+    void observe(const FmsPlan& plan);
     int phase() const {return phase_;}
     unsigned confirmations() const {return confirmations_;}
     bool complete() const {return complete_;}
@@ -42,7 +42,6 @@ private:
     double next_phase_=0,next_attempt_=0;
     unsigned confirmations_=0;
     bool complete_=false;
-    std::string origin_,destination_;
 };
 
 // Nonblocking transaction. The caller reads one simulator-thread screen per
@@ -55,27 +54,32 @@ public:
     void reset(bool initial_sample=true);
     void request() {if(!requested_by_crew_){requested_=true;next_=0;}}
     void stop_automatic_capture();
+    void set_flight_phase(int phase) {flight_phase_=phase;}
     // Restore when disabling/stopping, while aircraft handles are still valid.
     // The simulator port supplies the tracked major page; standalone callers
     // without a parent hint retain screen-based restoration / F-PLN fallback.
     std::string cancel();
     const FmsPlan& plan() const {return plan_;}
+    const FmsPlan& sampled_plan() const {return pending_;} // Raw endpoints before cached halves / phase protection.
     const std::string& status() const {return status_;}
     bool busy() const {return stage_!=Stage::idle;}
     bool wants_screen(double now) const {return busy()||(requested_&&now>=next_&&now-last_activity_>=crew_idle_seconds);}
     double age(double now) const {return sampled_>=0?now-sampled_:-1;}
     unsigned generation() const {return generation_;}
     bool crew_triggered() const {return sampling_from_crew_;}
+    bool complete_pair() const {return complete_pair_;}
     unsigned crew_retry() const {return sampling_retry_;}
     McduPage saved_page() const {return saved_;}
 private:
     static constexpr double crew_idle_seconds=5;
-    static constexpr unsigned max_crew_retries=5;
+    static constexpr unsigned max_crew_retries=1;
     enum class Stage {idle, detour, fpln, stable, fuel, fuel_stable, verify, verify_stable, restore, restore_wait, ident_wait, init_b_wait};
     Stage stage_=Stage::idle;
     McduPage saved_=McduPage::unknown;
     FmsPlan plan_,pending_;
     bool pending_valid_=false;
+    bool complete_pair_=false;
+    int flight_phase_=0;
     bool requested_=true; // Initial sample; subsequent samples require a request or crew input.
     bool requested_by_crew_=false,sampling_from_crew_=false;
     bool crew_session_=false;

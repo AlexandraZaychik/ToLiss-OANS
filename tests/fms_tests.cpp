@@ -76,15 +76,15 @@ void automatic_tests() {
     p.origin.airport.clear();p.destination.airport="ZUUU";a.observe(p);a.observe(p);
     check(!a.complete()&&a.confirmations()==0,"two identical destination-only samples do not latch");
     p.origin.airport="ZUCK";a.observe(p);
-    check(!a.complete()&&a.confirmations()==1,"first full airport pair requires confirmation");
+    check(a.complete()&&a.confirmations()==1,"one full airport pair completes automatic capture");
     p.destination.airport="ZSSS";a.observe(p);
-    check(!a.complete()&&a.confirmations()==1,"different airport pair restarts confirmation");
+    check(a.complete()&&a.confirmations()==1,"later airport changes do not restart completed capture");
     a.observe(FmsPlan{});a.observe(p);
-    check(!a.complete()&&a.confirmations()==1,"failed transaction breaks consecutive confirmation");
+    check(a.complete()&&a.confirmations()==1,"later failures preserve completion latch");
     auto empty=p;empty.origin.airport.clear();empty.destination.airport.clear();a.observe(empty);a.observe(p);
-    check(!a.complete()&&a.confirmations()==1,"empty plan breaks consecutive confirmation");
+    check(a.complete()&&a.confirmations()==1,"later empty plans preserve completion latch");
     p.origin.runway="02L";p.destination.runway="18R";a.observe(p);
-    check(a.complete()&&a.confirmations()==2,"same airport pair confirms despite runway changes");
+    check(a.complete()&&a.confirmations()==1,"runways are not required for capture completion");
     a.observe(FmsPlan{});
     check(a.complete()&&!a.request_due(10000,true,false),"later failures never restart completed automatic session");
     a=FmsAutoCapture{};a.update_phase(0,2);
@@ -105,13 +105,13 @@ void automatic_tests() {
     manual.activity(117.1,false);
     check(!manual.busy()&&!manual.wants_screen(122.09)&&manual.wants_screen(122.1),"crew interruption rearms capture after five quiet seconds");
     FmsAutoCapture crew;
-    crew.observe(parse_fpln(plan("ZUCK","")),true);
+    crew.observe(parse_fpln(plan("ZUCK","")));
     check(!crew.complete(),"partial crew capture keeps automatic fallback available");
     manual.reset(false);manual.activity(120,true);
     cycle(manual,125,ident(),plan());
     check(manual.crew_triggered(),"completed transaction retains selected-key source");
-    crew.observe(manual.plan(),manual.crew_triggered());
-    check(crew.complete()&&!crew.phase_due(10000)&&!crew.request_due(10000,true,false),"one complete crew capture stops phase polling and automatic requests");
+    crew.observe(manual.sampled_plan());
+    check(crew.complete()&&crew.phase_due(10000)&&!crew.request_due(10000,true,false),"one complete crew capture stops automatic requests while phase tracking continues");
     cycle(manual,130,ident(),plan());
     check(!manual.crew_triggered(),"later automatic request does not inherit crew source");
 }
@@ -211,17 +211,65 @@ void tests() {
     a.reset();a.tick(0,data());a.tick(.25,page("DIR TO"));a.tick(.5,plan());a.tick(.7,plan());
     a.tick(4,plan());check(a.tick(4.1,plan())=="Data","fuel page timeout restores original page");
 }
+void partial_and_phase_tests() {
+    for(bool crew:{false,true}) {
+        FmsSampler a(false);FmsAutoCapture automatic;
+        if(crew)a.activity(0,true);
+        cycle(a,5,data(),plan("ZUCK02L",""));
+        check(a.plan().origin.airport=="ZUCK"&&a.plan().destination.airport.empty()&&!a.complete_pair(),
+              "origin-only capture publishes immediately for either trigger");
+        automatic.observe(a.sampled_plan());
+        check(!automatic.complete(),"origin-only capture keeps automatic fallback available");
+        if(crew)a.activity(10,true);
+        cycle(a,15,data(),plan("PPOS","ZUUU02L"));
+        check(a.plan().origin.airport=="ZUCK"&&a.plan().origin.runway=="02L"&&a.plan().destination.airport=="ZUUU"&&!a.complete_pair(),
+              "destination-only capture fills destination and retains cached origin");
+        automatic.observe(a.sampled_plan());
+        check(!automatic.complete(),"merged halves never masquerade as one complete capture");
+        if(crew)check(a.wants_screen(22.05),"partial crew capture still retries despite both cached airports being present");
+        cycle(a,25,data(),plan("ZBAA",""));
+        check(a.plan().origin.airport=="ZBAA"&&a.plan().origin.runway.empty()&&a.plan().destination.airport=="ZUUU"&&a.plan().alternate=="ZALT",
+              "origin-only update retains destination and alternate while clearing deselected origin runway");
+    }
+    FmsSampler a(false);
+    cycle(a,0,data(),plan());
+    a.set_flight_phase(5);a.activity(3,true);
+    cycle(a,8,data(),plan("ZBAA18R","ZSSS36L"),fuel("ZSSS","ZSPD"));
+    check(a.plan().origin.airport=="ZUCK"&&a.plan().origin.runway=="02L"&&a.plan().destination.airport=="ZSSS"&&a.plan().alternate=="ZSPD",
+          "phase five freezes origin and departure runway while destination and alternate update");
+    a.set_flight_phase(8);cycle(a,20,data(),plan("PPOS","ZBAA"),fuel("ZBAA","----"));
+    check(a.plan().origin.airport=="ZUCK"&&a.plan().destination.airport=="ZBAA"&&a.plan().alternate.empty(),
+          "later phases preserve origin when FROM disappears");
+    a.activity(23,true);a.tick(28,data());a.activity(28.1,false);
+    check(a.plan().origin.airport=="ZUCK"&&a.plan().origin.runway=="02L"&&a.plan().observed,
+          "crew interruption cannot clear frozen origin");
+    cycle(a,40,data(),plan("PPOS",""));
+    check(a.plan().origin.airport=="ZUCK"&&a.plan().destination.airport.empty(),"empty in-flight plan cannot clear frozen origin");
+    a.tick(43,data(),false);
+    check(a.plan().origin.airport=="ZUCK"&&a.plan().observed,"provider loss cannot clear frozen origin");
+    a.reset(false);a.set_flight_phase(5);cycle(a,0,data(),plan());
+    check(a.plan().origin.airport.empty()&&a.plan().destination.airport=="ZUUU"&&a.complete_pair(),
+          "phase five does not fill even an initially empty origin but retains raw capture completeness");
+    a.reset(false);cycle(a,0,data(),plan());
+    a.request();a.tick(5,data());a.tick(5.25,page("DIR TO"));
+    sample_pages(a,5,plan("ZBAA","ZSSS"),fuel("ZSSS"));
+    a.set_flight_phase(5);a.tick(6.8,plan());a.tick(7.05,data());
+    check(a.plan().origin.airport=="ZUCK"&&a.plan().destination.airport=="ZSSS",
+          "phase at publication protects origin when phase changes during sampling");
+    a.set_flight_phase(4);cycle(a,10,data(),plan("ZBAA","ZSSS"),fuel("ZSSS"));
+    check(a.plan().origin.airport=="ZBAA","pre-takeoff phase permits origin updates again");
+}
 void retry_tests() {
     auto blocked=data();blocked.fields["spw"]="INPUT";
     FmsSampler a(false);a.activity(0,true);
-    for(unsigned attempt=0;attempt<=5;++attempt) {
+    for(unsigned attempt=0;attempt<=1;++attempt) {
         const double now=5+attempt*5;
         a.request(); // The automatic scheduler must not shorten a crew retry delay.
         check(!a.wants_screen(now-.01)&&a.wants_screen(now),"crew attempts are separated by five seconds");
         check(a.tick(now,blocked).empty()&&!a.busy()&&a.crew_triggered()&&a.crew_retry()==attempt,
               "blocked checks retain crew source and retry number");
     }
-    check(!a.wants_screen(100),"one initial attempt plus five retries exhausts the crew request");
+    check(!a.wants_screen(100),"one initial attempt plus one retry exhausts the crew request");
     a.activity(100,true);a.tick(105,blocked);
     check(a.crew_retry()==0&&!a.wants_screen(109.99)&&a.wants_screen(110),"new selected key resets exhausted retry budget");
     check(a.tick(110,ident())=="DirTo"&&a.crew_retry()==1,"first retry starts with the original crew source");
@@ -285,4 +333,4 @@ void tracked_parent_tests() {
         check(a.cancel().empty(),"crew interruption never restores over user input");
     }
 }
-int main(){try{tests();retry_tests();tracked_parent_tests();std::cout<<"PASS "<<checks<<" FMS checks\n";}catch(const std::exception& e){std::cerr<<"FAIL "<<e.what()<<'\n';return 1;}}
+int main(){try{tests();partial_and_phase_tests();retry_tests();tracked_parent_tests();std::cout<<"PASS "<<checks<<" FMS checks\n";}catch(const std::exception& e){std::cerr<<"FAIL "<<e.what()<<'\n';return 1;}}
