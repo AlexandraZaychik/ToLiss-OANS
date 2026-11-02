@@ -21,7 +21,7 @@
 #include "detail_log.hpp"
 #include "nd_ui.hpp"
 #include "aircraft_profile.hpp"
-#include "aircraft_profile_generator.hpp"
+#include "aircraft/backend.hpp"
 #include "gl_state.hpp"
 #include "gl_coords.hpp"
 #include "gl_font.hpp"
@@ -29,7 +29,7 @@
 #include "map_texture.hpp"
 #include "dsf_buildings.hpp"
 #include "map_viewport.hpp"
-#include "fms_xplm.hpp"
+#include "fms_source.hpp"
 #include "runway_ahead.hpp"
 #include <algorithm>
 #include <cmath>
@@ -50,7 +50,7 @@
 
 using namespace oans;
 namespace {
-constexpr const char* version="0.4.37";
+constexpr const char* version="0.4.39";
 constexpr float white[3]={1,1,1},cyan[3]={.20f,.90f,1},green[3]={0,1,0},amber[3]={1,.65f,0};
 constexpr float taxi_yellow[3]={.95f,.83f,0},magenta[3]={1,.35f,1};
 AtlasFont map_font;
@@ -129,9 +129,11 @@ struct Ref {
     }
 };
 std::map<std::string,Ref> refs;
-Ref& dr(const std::string& n) {return refs.at(n);}
+const Ref& dr(const std::string& n) {
+    static const Ref missing;auto it=refs.find(n);return it==refs.end()?missing:it->second;
+}
 double value(const std::string& n,int i=0,double fallback=0) {return dr(n).get(i,fallback);}
-const std::vector<std::pair<std::string,std::string>> names={
+const aircraft::Bindings simulator_names={
     {"lat","sim/flightmodel/position/latitude"},{"lon","sim/flightmodel/position/longitude"},
     {"speed","sim/flightmodel/position/groundspeed"},{"psi","sim/flightmodel/position/psi"},
     {"tcas_id","sim/cockpit2/tcas/targets/modeS_id"},
@@ -147,13 +149,7 @@ const std::vector<std::pair<std::string,std::string>> names={
     {"theta","sim/flightmodel/position/theta"},{"phi","sim/flightmodel/position/phi"},
     {"lx","sim/flightmodel/position/local_x"},{"ly","sim/flightmodel/position/local_y"},{"lz","sim/flightmodel/position/local_z"},
     {"ground","sim/flightmodel2/gear/on_ground"},{"paused","sim/time/paused"},
-    {"range0","AirbusFBW/NDrangeCapt"},{"range1","AirbusFBW/NDrangeFO"},
-    {"mode0","AirbusFBW/NDmodeCapt"},{"mode1","AirbusFBW/NDmodeFO"},
-    {"map0","AirbusFBW/CaptMAPAvail"},{"map1","AirbusFBW/CoMAPAvail"},
-    {"irs_align","AirbusFBW/TimeToAlign"},
-    {"bright","AirbusFBW/DUBrightness"},{"bus","sim/cockpit2/electrical/bus_volts"},
-    {"fallback","AirbusFBW/DisplayResolutionFallback"},
-    {"swap0","AirbusFBW/PFDNDToggleCapt"},{"swap1","AirbusFBW/PFDNDToggleCo"},{"ecamSwap","AirbusFBW/ECAMNDSwitching"},
+    {"bus","sim/cockpit2/electrical/bus_volts"},
     {"view","sim/graphics/view/view_type"},{"vr","sim/graphics/VR/enabled"},
     {"world","sim/graphics/view/world_matrix"},{"acf","sim/graphics/view/acf_matrix"},{"projection","sim/graphics/view/projection_matrix_3d"},
     {"hx","sim/graphics/view/pilots_head_x"},{"hy","sim/graphics/view/pilots_head_y"},{"hz","sim/graphics/view/pilots_head_z"},
@@ -172,7 +168,11 @@ SurfaceTracker surface_tracker;
 int status_bar_item=-1,mcdu2_auto_item=-1,adsb_in_item=-1;
 Config config;
 double status_bar_height() {return config.status_bar&&!config.test?stus_bar_height:0;}
-McduFmsPort fms_port;
+FmsPort fms_port;
+const aircraft::Backend* aircraft_backend=nullptr;
+const aircraft::DataAccess aircraft_data{value,[](const std::string& key,int i){return dr(key).numeric(i);}};
+int nd_mode(int side) {return aircraft_backend?aircraft_backend->nd_mode(aircraft_data,side):-1;}
+
 RunwayAhead runway_advisory;
 struct AdvisoryTest {
     std::string airport_query,runway_query,requested_airport,requested_runways;
@@ -186,6 +186,7 @@ double advisory_choose_at=0;
 double fms_bind_at=0;
 unsigned fms_generation_seen=0;
 bool enabled=false,profile_ok=false,aircraft_ok=false,nd_on[2]={false,false},manual_airport=false;
+bool aircraft_probe_complete=false,aircraft_report_pending=false;
 bool airport_position_pending=true,first_oans_open=true;
 double bind_at=0,model_check_at=0,choose_at=0,heartbeat=0,traffic_sample_at=0;
 std::string status="INITIALIZING";
@@ -329,12 +330,9 @@ bool aircraft_position_ready(int side) {
     // MAP AVAIL can already be true while IRS alignment is still counting down.
     // Missing/invalid alignment status must not reveal simulator-truth positions.
     return aircraft_ok&&dr("lat").numeric()&&dr("lon").numeric()&&
-        dr("irs_align").numeric()&&std::isfinite(value("irs_align"))&&value("irs_align")<=0&&
         std::isfinite(value("lat"))&&std::abs(value("lat"))<=90&&
         std::isfinite(value("lon"))&&std::abs(value("lon"))<=180&&
-        dr("bus").numeric(1)&&std::max(value("bus",0),value("bus",1))>=20&&
-        ((side!=1&&dr("map0").numeric()&&value("map0")>=.5)||
-         (side!=0&&dr("map1").numeric()&&value("map1")>=.5));
+        aircraft_backend->position_ready(aircraft_data,side);
 }
 const Airport* displayed_advisory_airport() {return advisory_test.active?advisory_test.airport.get():advisory_airport.get();}
 bool advisory_blink() {
@@ -373,7 +371,7 @@ std::string form_encode(const std::string& input) {
 #ifdef _WIN32
 std::string post_overpass(const char* host,const std::string& body) {
     const std::wstring wide_host(host,host+std::strlen(host));
-    WinHttpHandle session{WinHttpOpen(L"ToLissOANS/0.4.37 airport-map",WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+    WinHttpHandle session{WinHttpOpen(L"ToLissOANS/0.4.39 airport-map",WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
                                       WINHTTP_NO_PROXY_NAME,WINHTTP_NO_PROXY_BYPASS,0)};
     if(!session.value)throw std::runtime_error(winhttp_error("WinHttpOpen"));
     if(!WinHttpSetTimeouts(session.value,10000,10000,20000,45000))
@@ -656,12 +654,22 @@ void read_config() {
 }
 void bind_refs(bool aircraft_refs=true) {
     OANS_TRACE_SCOPE();
-    for(const auto& n:names) {
-        // Aircraft providers can load AFTER us. In XPluginStart, resolve only
-        // simulator-owned interfaces; first flight loop resolves providers.
-        if(!aircraft_refs&&n.second.rfind("AirbusFBW/",0)==0)refs[n.first]=Ref{};
-        else refs[n.first].bind(n.second.c_str());
+    // Provider probing is deferred until the simulator flight loop.
+    for(const auto& n:simulator_names)refs[n.first].bind(n.second.c_str());
+    if(!aircraft_refs) {
+        if(aircraft_backend)for(const auto& n:aircraft_backend->bindings)refs[n.first]=Ref{};
+        return;
     }
+    const auto* selected=aircraft::detect();
+    if(!aircraft_probe_complete||selected!=aircraft_backend)aircraft_report_pending=true;
+    aircraft_probe_complete=true;
+    if(selected!=aircraft_backend) {
+        if(aircraft_backend)for(const auto& n:aircraft_backend->bindings)refs.erase(n.first);
+        fms_port.select(selected?selected->make_fms():nullptr);
+        aircraft_backend=selected;profile_ok=aircraft_ok=false;profile::current={};
+        fms_bind_at=0;fms_generation_seen=0;model_check_at=0;
+    }
+    if(aircraft_backend)for(const auto& n:aircraft_backend->bindings)refs[n.first].bind(n.second.c_str());
 }
 void diagnostics() {
     OANS_TRACE_SCOPE();
@@ -674,7 +682,7 @@ void diagnostics() {
      <<" airport="<<(airport?airport->icao:"NONE")<<" requested="<<last_requested<<'\n';
     f<<"OANS_STUS_BAR enabled="<<config.status_bar<<" surface="<<current_surface<<'\n';
     f<<"OANS_EMPTY_MAP message="<<(airport?"NONE":airport_map_loading?"PLEASE WAIT":"ARPT NAV NOT AVAIL")<<'\n';
-    f<<"OANS_IRS status_present="<<dr("irs_align").numeric()<<" seconds_remaining="<<value("irs_align")<<'\n';
+    if(aircraft_backend)aircraft_backend->diagnostics(f,aircraft_data);
     const auto* alert_airport=displayed_advisory_airport();
     f<<"RWY_AHEAD airport="<<(alert_airport?alert_airport->icao:"NONE")
      <<" low_speed_seconds="<<runway_advisory.low_speed_seconds()<<" count="<<displayed_advisories().size()
@@ -686,15 +694,7 @@ void diagnostics() {
         <<" gs_kt="<<target.ground_speed_kt<<" type="<<target.icao_type<<'\n';
     f<<"OANS_DATABASE cycle="<<airport_database_status.cycle<<" validity="<<airport_database_status.validity
      <<" source=Custom Data/cycle_info.txt\n";
-    const auto& plan=fms_port.sampler.plan();
-    f<<"FMS source=MCDU2 enabled="<<config.fms<<" bound="<<fms_port.ready()<<" busy="<<fms_port.sampler.busy()
-     <<" observed="<<plan.observed<<" age="<<fms_port.sampler.age(XPLMGetElapsedTime())<<" status="<<fms_port.sampler.status()
-     <<" plan_status="<<plan.reason<<" origin="<<plan.origin.airport<<" departure_runway="<<plan.origin.runway
-     <<" destination="<<plan.destination.airport<<" arrival_runway="<<plan.destination.runway<<" alternate="<<plan.alternate
-     <<" saved_page="<<mcdu_page_name(fms_port.sampler.saved_page())<<'\n';
-    f<<"FMS_AUTO ecam_phase="<<fms_port.automatic.phase()<<" confirmations="<<fms_port.automatic.confirmations()
-     <<" complete="<<fms_port.automatic.complete()<<'\n';
-    f<<"MCDU_MAJOR mcdu1="<<fms_port.major_page(1)<<" mcdu2="<<fms_port.major_page(2)<<'\n';
+    fms_port.diagnostics(f,XPLMGetElapsedTime(),config.fms);
     f<<"RWY_AHEAD_TEST active="<<advisory_test.active<<" pending="<<advisory_test.pending<<" steady="<<advisory_test.steady
      <<" airport="<<advisory_test.airport_query<<" runway="<<advisory_test.runway_query<<" message="<<advisory_test.message<<'\n';
     for(int side=0;side<2;++side)f<<"RWY_AHEAD_display side="<<side<<" nd="<<advisory_display_available(side,false)
@@ -706,6 +706,12 @@ void diagnostics() {
             f<<"runway_label side="<<side<<" pair="<<label.first<<'-'<<label.second<<" selected="<<label.selected
              <<" center="<<label.center.x<<','<<label.center.y<<" visible_start="<<label.start.x<<','<<label.start.y
              <<" visible_end="<<label.end.x<<','<<label.end.y<<'\n';}
+    auto names=simulator_names;
+    if(aircraft_backend)names.insert(names.end(),aircraft_backend->bindings.begin(),aircraft_backend->bindings.end());
+    f<<"AIRCRAFT_BACKEND id="<<(aircraft_backend?aircraft_backend->id:"NONE")
+     <<" manufacturer=\""<<(aircraft_backend?aircraft_backend->manufacturer:"UNKNOWN")<<"\"\n";
+    f<<"AIRCRAFT_IDENTIFICATION state="<<(!aircraft_probe_complete?"WAITING":aircraft_backend?"IDENTIFIED":"UNSUPPORTED")
+     <<" plugin_enabled="<<enabled<<" sim_time="<<XPLMGetElapsedTime()<<'\n';
     for(const auto& n:names) {const auto& r=dr(n.first);f<<n.second<<" present="<<(r.id!=nullptr)<<" type="<<r.type<<" count="<<r.count<<" writable="<<r.writable<<" value="<<r.get()<<'\n';}
     f<<"panel_passes="<<pass_count[0]<<','<<pass_count[1]<<','<<pass_count[2]<<"\nND_clicks="<<hit_count[0]<<','<<hit_count[1]<<'\n';
     f<<"click_projection time="<<click_update_at;
@@ -750,17 +756,21 @@ void diagnostics() {
         <<" feature_kind="<<views[i].feature_kind<<" feature_selection="<<views[i].feature_selection<<" feature_first="<<views[i].feature_first
         <<" feature_dropdown="<<views[i].feature_dropdown<<" feature_initial_dropdown="<<views[i].feature_initial_dropdown
         <<" confirmed_airport="<<(views[i].confirmed_airport?views[i].confirmed_airport->icao:"NONE")<<" airport_modifying="<<views[i].airport_modifying
-        <<" not_in_plan="<<(airport&&airport_outside_active_plan(fms_port.sampler.plan(),airport->icao))<<'\n';
+        <<" not_in_plan="<<(airport&&airport_outside_active_plan(fms_port.plan(),airport->icao))<<'\n';
+    aircraft_report_pending=false;
     log("Interface report saved: "+(plugin_dir/"interfaces.txt").u8string());
 }
 void nearest_airport();
 void inspect_model() {
     OANS_TRACE_SCOPE();
+    const bool previous_profile=profile_ok,previous_ready=aircraft_ok;
     char name[512]={},path[2048]={};XPLMGetNthAircraftModel(0,name,path);
     aircraft_dir=std::filesystem::u8path(path).parent_path();
     char icao[32]={};if(dr("icao").id)XPLMGetDatab(dr("icao").id,icao,0,31);
     std::string profile_error;
     const std::string aircraft_icao(icao);
+    log("Aircraft manufacturer=\""+std::string(aircraft_backend?aircraft_backend->manufacturer:"UNKNOWN")+
+        "\" family="+(aircraft_backend?aircraft_backend->id:"NONE")+" ICAO="+aircraft_icao+" model="+name);
     OANS_CONFIG("Aircraft model="+std::string(name)+" path="+path+" ICAO="+aircraft_icao);
     const double minimum=minimum_runway_length(aircraft_icao);
     const double width=minimum_runway_width(aircraft_icao);
@@ -783,9 +793,11 @@ void inspect_model() {
         }
     }
     std::filesystem::path loaded_profile;
-    profile_ok=profile::load_for_aircraft(plugin_dir/"config",std::filesystem::u8path(path),aircraft_icao,loaded_profile,profile_error);
+    profile_ok=aircraft_backend&&aircraft_backend->load_profile(plugin_dir/"config"/aircraft_backend->id,std::filesystem::u8path(path),aircraft_icao,loaded_profile,profile_error);
+    if(!aircraft_backend) {profile::current={};profile_error="No supported aircraft backend detected";}
     if(profile_ok)log("Loaded aircraft profile: "+loaded_profile.u8string());
-    aircraft_ok=profile_ok&&dr("range0").numeric()&&dr("mode0").numeric();
+    aircraft_ok=profile_ok&&aircraft_backend->ready(aircraft_data);
+    if(profile_ok!=previous_profile||aircraft_ok!=previous_ready)aircraft_report_pending=true;
     if(!profile_ok)log(profile_error);
     OANS_CONFIG("Profile result valid="+std::to_string(profile_ok)+" path="+loaded_profile.u8string()+" aircraft_interfaces_ready="+std::to_string(aircraft_ok)+" error="+profile_error);
     status=profile_ok?"AIRCRAFT PROFILE LOADED: "+std::string(icao):"ND BLOCKED: AIRCRAFT PROFILE MISSING OR INVALID";
@@ -872,7 +884,7 @@ UiModel ui_model() {
     m.bottom_inset=status_bar_height();
     m.database=airport_database_status;
     m.status=status;
-    const auto& plan=fms_port.sampler.plan();m.fms_status=fms_port.sampler.status();
+    const auto& plan=fms_port.plan();m.fms_status=fms_port.status();
     if(plan.observed&&index_ready) {
         if(find_airport(airport_index,plan.origin.airport))m.fms_origin=plan.origin.airport;
         if(find_airport(airport_index,plan.destination.airport))m.fms_destination=plan.destination.airport;
@@ -1010,7 +1022,7 @@ void text(double x,double y,const std::string& s,const float* c=white,double max
 using MapTransform=MapProjection;
 MapTransform transform(int id) {
     const auto& view=views[id];MapTransform m;
-    int mode=id<2?static_cast<int>(value("mode"+std::to_string(id))):4;
+    int mode=id<2?nd_mode(id):4;
     if(airport) {
         Vec2 ac=local(value("lat"),value("lon"),airport->lat,airport->lon);
         // Follow ownship across the airport, irrespective of distance from
@@ -1125,7 +1137,7 @@ void draw_controls(int id) {
 }
 void draw_compass(int id) {
     OANS_TRACE_SCOPE();
-    const auto m=transform(id);int mode=id<2?static_cast<int>(value("mode"+std::to_string(id))):4;
+    const auto m=transform(id);int mode=id<2?nd_mode(id):4;
     const bool arc=mode==3,plan=mode==4;double radius=m.radius;
     const float ring[]={.90f,.90f,.90f};
     auto point=[&](double a,double r){a*=pi/180;return m.anchor+Vec2{r*std::sin(a),r*std::cos(a)};};
@@ -1151,7 +1163,7 @@ void draw_compass(int id) {
     for(int sign:{-1,1}) {auto p=point(sign*52,radius*.5+12);text(p.x-14,p.y,half.str(),cyan,65,16);}
 }
 std::string advisory_fms_runway() {
-    const auto& p=fms_port.sampler.plan();
+    const auto& p=fms_port.plan();
     const auto* source=displayed_advisory_airport();
     if(!p.observed||!source)return {};
     if(p.origin.airport==source->icao)return p.origin.runway;
@@ -1160,16 +1172,12 @@ std::string advisory_fms_runway() {
 }
 bool advisory_display_available(int side,bool pfd) {
     if(!enabled||!profile_ok||!aircraft_ok||!config.nd||displayed_advisories().empty())return false;
-    if(!dr("fallback").numeric()||value("swap"+std::to_string(side))!=0||value("ecamSwap")!=0)return false;
-    if(!pfd) {const int mode=static_cast<int>(value("mode"+std::to_string(side),0,-1));if(mode<2||mode>4)return false;}
-    const int brightness=pfd?profile::current.pfd_brightness[side]:profile::current.nd_brightness[side];
-    return dr("bright").numeric(brightness)&&value("bright",brightness)>=.01&&
-        dr("bus").numeric(1)&&std::max(value("bus",0),value("bus",1))>=20;
+    return aircraft_backend->advisory_available(aircraft_data,side,pfd);
 }
 void draw_advisory(int id,bool pfd=false) {
     OANS_TRACE_SCOPE();
     if(!a350_ui||displayed_advisories().empty())return;
-    const int mode=id<2?static_cast<int>(value("mode"+std::to_string(id))):4;
+    const int mode=id<2?nd_mode(id):4;
     if(!map_font.upload(XPLMGenerateTextureNumbers,XPLMBindTexture2d))throw std::runtime_error("Advisory font upload failed");
     const auto& vertices=a350_ui->advisory(mode,pfd,displayed_advisories(),advisory_fms_runway(),advisory_blink());
     XPLMSetGraphicsState(0,1,0,0,1,0,0);XPLMBindTexture2d(map_font.texture(),0);
@@ -1197,14 +1205,14 @@ void draw_map(int id,bool nd) {
         input.simple_stand_names=config.simple_stand_names;
         input.position_valid=aircraft_position_ready(id<2?id:-1);
         if(config.adsb_in)input.traffic=traffic_targets;
-        input.mode=id<2?static_cast<int>(value("mode"+std::to_string(id))):4;input.range=view.range_nm;
+        input.mode=id<2?nd_mode(id):4;input.range=view.range_nm;
         if(view.feature_kind==0&&view.feature_selection>=0&&view.feature_selection<int(map_features[0].size()))
             input.map_runway=map_features[0][view.feature_selection].name;
         input.crosses=view.crosses;input.flags=view.flags;
         if(displayed_advisory_airport()&&airport->icao==displayed_advisory_airport()->icao) {
             input.runway_ahead=displayed_advisories();input.alert_blink=advisory_blink();
         }
-        const auto& plan=fms_port.sampler.plan();
+        const auto& plan=fms_port.plan();
         input.outside_plan=airport_outside_active_plan(plan,airport->icao);
         if(plan.observed) {
             const bool ground=value("ground",0)>0||value("ground",1)>0||value("ground",2)>0;
@@ -1234,7 +1242,7 @@ void draw_map(int id,bool nd) {
     std::ostringstream range;range<<view.range_nm;
     text(8,578,"GS",white,40,16);text(47,576,std::to_string(static_cast<int>(value("speed")/kt+.5)),green,65,22);
     text(110,578,"TAS",white,48,16);text(165,578,value("tas")/kt>=60?std::to_string(static_cast<int>(value("tas")/kt+.5)):"---",green,70,16);
-    const int mode=id<2?static_cast<int>(value("mode"+std::to_string(id))):4;
+    const int mode=id<2?nd_mode(id):4;
     const bool heading=view.orientation<0?(mode==2||mode==3):view.orientation==1;
     std::string title=airport?airport->name:"NO AIRPORT";for(char& c:title)c=static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
     double title_width=std::min(290.0,map_font.width(title,16));text(592-title_width,579,title,white,290,16);
@@ -1246,7 +1254,7 @@ void draw_map(int id,bool nd) {
     if(status_bar_height()>0)rect(0,0,600,status_bar_height(),bg);
     if(!(config.test&&nd))draw_controls(id);
     if(a350_ui&&!(config.test&&nd)) {
-        const auto& notice=a350_ui->plan_notice(mode,airport&&airport_outside_active_plan(fms_port.sampler.plan(),airport->icao));
+        const auto& notice=a350_ui->plan_notice(mode,airport&&airport_outside_active_plan(fms_port.plan(),airport->icao));
         XPLMSetGraphicsState(0,1,0,0,1,0,0);XPLMBindTexture2d(map_font.texture(),0);
         draw_a350_vertices(notice,render_gain);graphics();
     }
@@ -1344,15 +1352,7 @@ const char* nd_overlay_blocked(int side) {
     if(!enabled)return "PLUGIN DISABLED";
     if(!aircraft_ok||!profile_ok)return "AIRCRAFT PROFILE UNAVAILABLE";
     if(!config.nd)return "ND DISABLED IN CONFIG";
-    if(!dr("fallback").numeric())return "DISPLAY RESOLUTION INTERFACE MISSING";
-    if(value("range"+std::to_string(side),0,99)!=0)return "SET PHYSICAL ND RANGE TO 10";
-    const int mode=static_cast<int>(value("mode"+std::to_string(side),0,-1));
-    if(!config.test&&(mode<2||mode>4))return "SELECT NAV / ARC / PLAN";
-    if(value("map"+std::to_string(side))<.5)return "AIRCRAFT MAP UNAVAILABLE";
-    if(value("bright",profile::current.nd_brightness[side])<.01)return "ND BRIGHTNESS OFF";
-    if(value("swap"+std::to_string(side))!=0||value("ecamSwap")!=0)return "DISPLAY SWITCHING ACTIVE";
-    if(dr("bus").has(1)&&std::max(value("bus",0),value("bus",1))<20)return "DISPLAY BUS BELOW 20V";
-    return "";
+    return aircraft_backend->overlay_blocked(aircraft_data,side,config.test);
 }
 const char* nd_blocked(int side) {
     const char* blocked=nd_overlay_blocked(side);
@@ -1431,25 +1431,24 @@ int gauge_draw(XPLMDrawingPhase,int,void*) {
         OANS_TRACE("OpenGL capture/setup begin");
         DrawingState drawing_state(graphics,restore_graphics);
         OANS_TRACE("OpenGL capture/setup done");
-        int resolution=value("fallback")>.5?1:0;
         for(int side=0;side<2;++side)if(nd_overlay_available(side)) {
-            OANS_TRACE("ND geometry side="+std::to_string(side)+" resolution="+std::to_string(resolution));
-            const auto& uv=profile::current.nd_uv[resolution][side];
+            OANS_TRACE("ND geometry side="+std::to_string(side));
+            const auto& uv=aircraft_backend->uv(aircraft_data,side,false);
             GLdouble model[16],projection[16],z;
             glGetDoublev(GL_MODELVIEW_MATRIX,model);glGetDoublev(GL_PROJECTION_MATRIX,projection);
             gluProject(l+uv[0]*w,b+uv[1]*h,0,model,projection,trace.viewport,&trace.projected[side][0],&trace.projected[side][1],&z);
             gluProject(l+uv[2]*w,b+uv[3]*h,0,model,projection,trace.viewport,&trace.projected[side][2],&trace.projected[side][3],&z);
             if(rt==1) {if(nd_on[side]) {const float black[3]={0,0,0};rect(l+uv[0]*w,b+uv[1]*h,l+uv[2]*w,b+uv[3]*h,black);}}
             else {
-                render_gain=std::clamp(value("bright",profile::current.nd_brightness[side]),0.0,1.0);
+                render_gain=std::clamp(aircraft_backend->brightness(aircraft_data,side,false),0.0,1.0);
                 render_rect(l+uv[0]*w,b+uv[1]*h,(uv[2]-uv[0])*w,(uv[3]-uv[1])*h,side,true);render_gain=1;
             }
             ++trace.submitted[side];
         }
         if(rt==2)for(int side=0;side<2;++side) {
             for(bool pfd:{false,true})if(advisory_display_available(side,pfd)&&(pfd||!nd_overlay_available(side))) {
-                const auto& uv=pfd?profile::current.pfd_uv[resolution][side]:profile::current.nd_uv[resolution][side];
-                render_gain=std::clamp(value("bright",pfd?profile::current.pfd_brightness[side]:profile::current.nd_brightness[side]),0.0,1.0);
+                const auto& uv=aircraft_backend->uv(aircraft_data,side,pfd);
+                render_gain=std::clamp(aircraft_backend->brightness(aircraft_data,side,pfd),0.0,1.0);
                 render_advisory_rect(l+uv[0]*w,b+uv[1]*h,(uv[2]-uv[0])*w,(uv[3]-uv[1])*h,side,pfd);render_gain=1;
             }
         }
@@ -2077,14 +2076,15 @@ float tick(float elapsed,float,int,void*) {
         if(heartbeat>=bind_at) {bind_at=heartbeat+5;bind_refs();}
         if(heartbeat>=traffic_sample_at) {traffic_sample_at=heartbeat+.1;refresh_tcas_targets();}
         if(!aircraft_ok&&heartbeat>=model_check_at) {model_check_at=heartbeat+5;inspect_model();}
+        if(aircraft_report_pending)diagnostics();
         log_display_state();
         if(aircraft_ok&&heartbeat>=fms_bind_at) {
             fms_bind_at=heartbeat+5;
             if(config.fms)fms_port.bind();else fms_port.bind_activity();
         }
-        fms_port.tick(heartbeat,config.fms&&aircraft_ok&&std::max(value("bus",0),value("bus",1))>=20);
-        if(fms_generation_seen!=fms_port.sampler.generation()) {
-            fms_generation_seen=fms_port.sampler.generation();
+        fms_port.tick(heartbeat,config.fms&&aircraft_ok&&aircraft_backend->powered(aircraft_data));
+        if(fms_generation_seen!=fms_port.generation()) {
+            fms_generation_seen=fms_port.generation();
             choose_at=0;
         }
         const bool position_ready=aircraft_position_ready();
@@ -2172,7 +2172,7 @@ float tick(float elapsed,float,int,void*) {
             std::optional<IndexEntry> target;
             {std::lock_guard<std::mutex> lock(db_mutex);
                 auto nearby=nearest(airport_index,value("lat"),value("lon"));
-                const auto& p=fms_port.sampler.plan();
+                const auto& p=fms_port.plan();
                 auto dest=p.observed?find_airport(airport_index,p.destination.airport):std::nullopt;
                 const bool airborne=dr("ground").numeric(2)&&value("ground",0)==0&&value("ground",1)==0&&value("ground",2)==0;
                 if(airborne&&dest) {
@@ -2254,7 +2254,7 @@ PLUGIN_API int XPluginStart(char* name,char* signature,char* description) {
     }catch(...) {XPLMDebugString("[ToLissOANS] Cannot initialize detail.log\n");}
     OANS_TRACE_SCOPE();OANS_TRACE(std::string("XPluginStart build=")+detail::flavor);
     std::strcpy(name,detail::debug?"ToLiss OANS (debug)":"ToLiss OANS (experimental)");std::strcpy(signature,"org.toliss-oans.experimental");
-    std::strcpy(description,"Airport navigation display for the inspected ToLiss A320 1.3.2.");
+    std::strcpy(description,"Airport navigation display for ToLiss aircraft and Laminar Research A330.");
     try {
         XPLMEnableFeature("XPLM_USE_NATIVE_PATHS",1);XPLMEnableFeature("XPLM_USE_NATIVE_WIDGET_WINDOWS",1);
         char plugin[2048]={},root[2048]={};XPLMGetPluginInfo(XPLMGetMyID(),nullptr,plugin,nullptr,nullptr);XPLMGetSystemPath(root);
@@ -2281,12 +2281,11 @@ PLUGIN_API int XPluginStart(char* name,char* signature,char* description) {
         oans_base_box={bounds[0],bounds[1],bounds[2],bounds[3]};
         set_oans_horizontal_offset(0);set_oans_vertical_offset(0);oans_slider_drag=false;
         nd_on[0]=nd_on[1]=false;
-        read_config();bind_refs(false);inspect_model();create_ui();
+        aircraft_probe_complete=false;aircraft_report_pending=false;
+        read_config();bind_refs(false);status="WAITING FOR AIRCRAFT IDENTIFICATION";create_ui();
         start_worker();XPLMRegisterFlightLoopCallback(tick,-1,nullptr);loop_registered=true;
         OANS_TRACE("Register gauges draw callback begin");
-        display_log("ND_REGISTER aircraft_range_interface_already_present="+
-            std::to_string(XPLMFindDataRef("AirbusFBW/NDrangeCapt")!=nullptr)+
-            " (interface presence is a load-order clue, not proof of final visibility)");
+        display_log("ND_REGISTER aircraft provider detection deferred to flight loop");
         draw_registered=XPLMRegisterDrawCallback(gauge_draw,xplm_Phase_Gauges,0,nullptr)!=0;
         display_log("ND_REGISTER callback_registered="+std::to_string(draw_registered)+" final_visibility=UNVERIFIED");
         OANS_TRACE("Register gauges draw callback result="+std::to_string(draw_registered));
@@ -2294,7 +2293,7 @@ PLUGIN_API int XPluginStart(char* name,char* signature,char* description) {
         // aircraft systems for this callback to retain the final ND image.
         if(!draw_registered)status="ND DRAW CALLBACK UNAVAILABLE: USE PLUGIN WINDOW";
         fms_port.log_event=log;
-        diagnostics();log("Native OANS plugin loaded. ND profile loaded="+std::to_string(profile_ok));return 1;
+        diagnostics();log("Native OANS plugin loaded. Aircraft identification pending first flight loop");return 1;
     } catch(const std::exception& e) {log(e.what());cleanup();detail::shutdown();return 0;}
 }
 PLUGIN_API void XPluginStop() {{OANS_TRACE_SCOPE();cleanup();OANS_TRACE("Plugin shutdown complete");}detail::shutdown();}
@@ -2312,7 +2311,7 @@ PLUGIN_API void XPluginReceiveMessage(XPLMPluginID from,int message,void* param)
             advisory_request.reset();pending_advisory.reset();advisory_requested.clear();}
         fms_port.clear(false);fms_bind_at=0;fms_generation_seen=0;
         if((message==XPLM_MSG_PLANE_LOADED||message==XPLM_MSG_PLANE_UNLOADED)&&reinterpret_cast<std::intptr_t>(param)==0)
-            fms_port.reset_major_pages();
+            fms_port.reset_tracking();
     }
     if(message==XPLM_MSG_PLANE_UNLOADED&&reinterpret_cast<std::intptr_t>(param)==0) {
         aircraft_ok=false;

@@ -1,4 +1,4 @@
-#include "aircraft_profile_generator.hpp"
+#include "profile.hpp"
 #include "aircraft_profile.hpp"
 #include "detail_log.hpp"
 #include "md5.h"
@@ -8,7 +8,8 @@
 #include <set>
 #include <stdexcept>
 
-namespace profile {
+namespace oans::toliss {
+using namespace ::profile;
 namespace {
 using Point=std::array<double,5>; // object x,y,z and texture u,v
 struct Screen {std::array<double,4> uv;std::array<Point,4> corners;};

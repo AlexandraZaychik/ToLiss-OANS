@@ -1,4 +1,7 @@
 // Test-only XPLM stand-in. Never install this DLL into X-Plane.
+#ifndef XPLM400
+#define XPLM400 1
+#endif
 #include <XPLMPlugin.h>
 #include <XPLMProcessing.h>
 #include <XPLMDataAccess.h>
@@ -33,7 +36,35 @@ XPLMFlightLoop_f loop=nullptr;XPLMDrawCallback_f draw=nullptr;
 std::string plugin_path,system_path,model_path;
 int setter_count=0,command_handlers=0;float elapsed=0;
 bool fms_enabled=false;
+bool aircraft_provider_available=true;
+bool toliss_signatures_available=true;
+std::string aircraft_ui_name="Unbranded A320";
+std::string aircraft_icao="A20N";
+Data aircraft_identity{"toliss_airbus/pfdoutputs/general/fd_configuration"};
+std::vector<Data*> registered_datarefs() {
+    std::vector<Data*> refs;
+    for(auto& entry:data) {
+        if(!aircraft_provider_available&&entry.first.rfind("AirbusFBW/",0)==0)continue;
+        if(!toliss_signatures_available&&entry.first.rfind("toliss_airbus/",0)==0)continue;
+        refs.push_back(&entry.second);
+    }
+    if(toliss_signatures_available)refs.push_back(&aircraft_identity);
+    return refs;
+}
 std::string fms_page="IDENT",fms_origin="ZUCK02L",fms_destination="ZUUU02L",fms_alternate="ZALT";
+int lr_fpln_presses=0,lr_fpln_pair=0;
+float lr_first_press=0;
+bool lr_fpln_spacing_ok=true;
+void fms_init_screen(int unit,const std::string& origin,const std::string& destination,const std::string& alternate) {
+    const auto prefix="AirbusFBW/MCDU"+std::to_string(unit);
+    for(auto& d:data)if(d.first.rfind(prefix,0)==0){d.second.type=xplmType_Data;d.second.bytes.clear();}
+    auto put=[&](const std::string& field,const std::string& value) {
+        auto& d=data[prefix+field];d.name=prefix+field;d.type=xplmType_Data;d.bytes=value;
+    };
+    put("titlew","INIT");put("label1w"," CO RTE        FROM/TO");put("label2w","ALTN/CO RTE");
+    put("cont1b",std::string(15,' ')+origin+"/"+destination);put("cont2b",alternate+"/----------");
+    if(unit==2)fms_page="INIT";
+}
 void fms_screen(const std::string& page) {
     fms_page=page;
     for(auto& d:data)if(d.first.rfind("AirbusFBW/MCDU2",0)==0){d.second.type=xplmType_Data;d.second.bytes.clear();}
@@ -42,7 +73,7 @@ void fms_screen(const std::string& page) {
     };
     if(page=="IDENT"){put("titlew","A320-251N");put("label2w","ACTIVE NAV DATA BASE");put("label3w","SECOND NAV DATA BASE");}
     if(page=="DIR")put("titlew","DIR TO");
-    if(page=="INIT"){put("titlew","INIT");put("label1w","CO RTE");}
+    if(page=="INIT")fms_init_screen(2,fms_origin.substr(0,4),fms_destination.substr(0,4),fms_alternate);
     if(page=="PERF")put("titlew","TAKE OFF");
     if(page=="PROG")put("titlew","A320 PROG");
     if(page=="ATC")put("titlew","ATSU DATALINK");
@@ -58,9 +89,35 @@ void fms_screen(const std::string& page) {
     if(page=="FPLN"){
         put("stitlew","FROM         CQH5482");put("cont1g",fms_origin);put("label6w","DEST TIME DIST EFOB");put("cont6w",fms_destination+" 0038 213 11.4");
     }
+    // Independent LR provider: standard 16-row text with no FROM label.
+    for(int i=0;i<16;++i) {
+        const auto name="sim/cockpit2/radios/indicators/fms_cdu2_text_line"+std::to_string(i);
+        auto& d=data[name];d.name=name;d.type=xplmType_Data;d.bytes.clear();
+        if(i==0)d.bytes=data["AirbusFBW/MCDU2titlew"].bytes;
+        else if(i<=12)d.bytes=data["AirbusFBW/MCDU2"+std::string(i%2?"label":"cont")+std::to_string((i+1)/2)+"w"].bytes;
+        if(i==2&&(page=="FPLN"||page=="FUEL"))d.bytes=data["AirbusFBW/MCDU2cont1g"].bytes;
+        if(i==4&&page=="FUEL")d.bytes=data["AirbusFBW/MCDU2cont2g"].bytes;
+        if(i==13)d.bytes="                      ↑↓";
+        if(i==0&&page=="DATA")d.bytes="DATA INDEX 1/2 ←→";
+    }
 }
 void fms_command(const std::string& name) {
     if(!fms_enabled)return;
+    if(name.rfind("sim/FMS2/",0)==0) {
+        if(name=="sim/FMS2/fpln") {
+            ++lr_fpln_presses;
+            if(lr_fpln_pair++==0){lr_first_press=elapsed;fms_screen("SUBPAGE");}
+            else {lr_fpln_spacing_ok&=elapsed-lr_first_press>=.24f;lr_fpln_pair=0;fms_screen("FPLN");}
+        } else {
+            lr_fpln_pair=0;
+            if(name=="sim/FMS2/dir_intc")fms_screen("DIR");
+            if(name=="sim/FMS2/data")fms_screen("DATA");
+            if(name=="sim/FMS2/fuel_pred")fms_screen("FUEL");
+            if(name=="sim/FMS2/ls_4l"&&fms_page=="DATA")fms_screen("IDENT");
+        }
+        return;
+    }
+    if(name=="AirbusFBW/MCDU1Init")fms_init_screen(1,fms_origin.substr(0,4),fms_destination.substr(0,4),fms_alternate);
     if(name=="AirbusFBW/MCDU2DirTo")fms_screen("DIR");
     if(name=="AirbusFBW/MCDU2Fpln")fms_screen("FPLN");
     if(name=="AirbusFBW/MCDU2Data")fms_screen("DATA");
@@ -76,6 +133,11 @@ void fms_command(const std::string& name) {
     if(name=="AirbusFBW/MCDU2LSK4L"&&fms_page=="DATA")fms_screen("IDENT");
 }
 extern "C" {
+__declspec(dllexport) void MockAircraftProvider(int available) {aircraft_provider_available=toliss_signatures_available=available!=0;}
+__declspec(dllexport) void MockTolissSignatures(int available) {toliss_signatures_available=available!=0;}
+__declspec(dllexport) void MockAircraftUiName(const char* name) {aircraft_ui_name=name;}
+__declspec(dllexport) void MockAircraftIcao(const char* icao) {aircraft_icao=icao;}
+__declspec(dllexport) void MockTolissDataRefName(const char* name) {aircraft_identity.name=name;}
 __declspec(dllexport) void MockConfigure(const char* plugin,const char* root,const char* model) {plugin_path=plugin;system_path=root;model_path=model;}
 __declspec(dllexport) void MockSet(const char* name,int i,double v) {
     // Fixtures can configure cold aircraft providers before the plugin binds them.
@@ -97,9 +159,20 @@ __declspec(dllexport) void MockKey(int key) {if(focused)focused->params.handleKe
 __declspec(dllexport) int MockFocus() {auto i=std::find(windows.begin(),windows.end(),focused);return i==windows.end()?-1:static_cast<int>(i-windows.begin());}
 __declspec(dllexport) void MockCommand(const char* name) {auto& c=commands.at(name);if(c.handler)c.handler(&c,xplm_CommandBegin,c.data);fms_command(name);}
 __declspec(dllexport) void MockInitFms() {fms_enabled=true;fms_screen("IDENT");}
+__declspec(dllexport) void MockFmsInit(int unit,const char* origin,const char* destination,const char* alternate) {fms_init_screen(unit,origin,destination,alternate);}
 __declspec(dllexport) void MockFmsPlan(const char* origin,const char* dest) {fms_origin=origin;fms_destination=dest;fms_screen(fms_page);}
 __declspec(dllexport) void MockFmsAlternate(const char* alternate) {fms_alternate=alternate;fms_screen(fms_page);}
 __declspec(dllexport) const char* MockFmsPage() {return fms_page.c_str();}
+__declspec(dllexport) void MockLrFms() {
+    fms_enabled=true;lr_fpln_presses=lr_fpln_pair=0;lr_fpln_spacing_ok=true;
+    fms_origin="ZUUU02L";fms_destination="ZBAA01";fms_alternate="ZBAD";fms_screen("IDENT");
+}
+__declspec(dllexport) int MockLrFplnPresses() {return lr_fpln_spacing_ok?lr_fpln_presses:-1;}
+__declspec(dllexport) int MockCommandObservers(const char* prefix) {
+    int count=0;
+    for(const auto& entry:commands)if(entry.second.handler&&entry.first.rfind(prefix,0)==0)++count;
+    return count;
+}
 __declspec(dllexport) void MockFmsSubpage() {fms_screen("SUBPAGE");}
 __declspec(dllexport) int MockResources() {return static_cast<int>(windows.size())+command_handlers+(loop?1:0)+(draw?1:0);}
 __declspec(dllexport) int MockMenuItems() {return static_cast<int>(menu_items.size());}
@@ -110,12 +183,15 @@ __declspec(dllexport) void MockWindowRect(int i,int* l,int* t,int* r,int* b) {au
 __declspec(dllexport) void MockHideWindow(int i) {windows.at(i)->params.visible=0;}
 
 XPLMDataRef XPLMFindDataRef(const char* name) {
+    if(!aircraft_provider_available&&std::string(name).rfind("AirbusFBW/",0)==0)return nullptr;
+    if(!toliss_signatures_available&&std::string(name).rfind("toliss_airbus/",0)==0)return nullptr;
     auto it=data.find(name);if(it!=data.end())return &it->second;
     Data d;d.name=name;std::string n=name;
     if(n.find("on_ground")!=std::string::npos) {d.values.resize(3);d.type=xplmType_IntArray;}
     if(n.find("throttle_ratio")!=std::string::npos) {d.values.resize(2);d.type=xplmType_FloatArray;}
     if(n.find("speedbrake1")!=std::string::npos) {d.values.resize(8);d.type=xplmType_FloatArray;}
     if(n.find("DUBrightness")!=std::string::npos) {d.values.assign(8,1);d.type=xplmType_FloatArray;}
+    if(n=="sim/cockpit2/switches/instrument_brightness_ratio") {d.values.assign(32,1);d.type=xplmType_FloatArray;}
     if(n.find("bus_volts")!=std::string::npos) {d.values.assign(2,28);d.type=xplmType_FloatArray;}
     if(n.find("matrix")!=std::string::npos) {d.values.resize(16);d.type=xplmType_FloatArray;}
     if(n=="sim/cockpit2/tcas/targets/modeS_id") {d.values.assign(64,0);d.type=xplmType_IntArray;}
@@ -130,7 +206,7 @@ XPLMDataRef XPLMFindDataRef(const char* name) {
     }
     if(n.find("MAPAvail")!=std::string::npos)d.values[0]=1;
     if(n.find("NDmode")!=std::string::npos)d.values[0]=2;
-    if(n.find("acf_ICAO")!=std::string::npos)d.type=xplmType_Data;
+    if(n.find("acf_ICAO")!=std::string::npos||n=="sim/aircraft/view/acf_ui_name")d.type=xplmType_Data;
     if(fms_enabled&&n.rfind("AirbusFBW/MCDU2",0)==0)d.type=xplmType_Data;
     if(n=="AirbusFBW/ECAMFlightPhase")d.type=xplmType_Int;
     if(n=="sim/flightmodel/position/latitude")d.values[0]=30;
@@ -138,6 +214,20 @@ XPLMDataRef XPLMFindDataRef(const char* name) {
     if(n=="sim/flightmodel/position/psi")d.values[0]=90;
     if(n=="sim/flightmodel/position/groundspeed")d.values[0]=50;
     return &data.emplace(n,std::move(d)).first->second;
+}
+int XPLMCountDataRefs() {return static_cast<int>(registered_datarefs().size());}
+void XPLMGetDataRefsByIndex(int offset,int count,XPLMDataRef* out) {
+    const auto refs=registered_datarefs();
+    for(int i=0;i<count;++i)out[i]=offset+i<static_cast<int>(refs.size())?refs[offset+i]:nullptr;
+}
+void XPLMGetDataRefInfo(XPLMDataRef ref,XPLMDataRefInfo_t* out) {
+    const auto& d=*static_cast<Data*>(ref);out->name=d.name.c_str();out->type=d.type;out->writable=1;out->owner=42;
+}
+void* XPLMFindSymbol(const char* name) {
+    if(std::strcmp(name,"XPLMCountDataRefs")==0)return reinterpret_cast<void*>(&XPLMCountDataRefs);
+    if(std::strcmp(name,"XPLMGetDataRefsByIndex")==0)return reinterpret_cast<void*>(&XPLMGetDataRefsByIndex);
+    if(std::strcmp(name,"XPLMGetDataRefInfo")==0)return reinterpret_cast<void*>(&XPLMGetDataRefInfo);
+    return nullptr;
 }
 int XPLMCanWriteDataRef(XPLMDataRef) {return 1;}
 XPLMDataTypeID XPLMGetDataRefTypes(XPLMDataRef r) {return static_cast<Data*>(r)->type;}
@@ -151,7 +241,7 @@ int XPLMGetDatavi(XPLMDataRef r,int* out,int off,int count) {auto& v=static_cast
 int XPLMGetDatavf(XPLMDataRef r,float* out,int off,int count) {auto& v=static_cast<Data*>(r)->values;if(!out)return static_cast<int>(v.size());int n=std::max(0,std::min(count,static_cast<int>(v.size())-off));for(int i=0;i<n;++i)out[i]=static_cast<float>(v[i+off]);return n;}
 void XPLMSetDatavi(XPLMDataRef r,int* in,int off,int count) {++setter_count;auto& v=static_cast<Data*>(r)->values;for(int i=0;i<count;++i)v.at(i+off)=in[i];}
 void XPLMSetDatavf(XPLMDataRef r,float* in,int off,int count) {++setter_count;auto& v=static_cast<Data*>(r)->values;for(int i=0;i<count;++i)v.at(i+off)=in[i];}
-int XPLMGetDatab(XPLMDataRef r,void* out,int off,int count) {auto& d=*static_cast<Data*>(r);const auto str=d.name=="sim/aircraft/view/acf_ICAO"?std::string("A20N"):d.bytes;
+int XPLMGetDatab(XPLMDataRef r,void* out,int off,int count) {auto& d=*static_cast<Data*>(r);const auto str=d.name=="sim/aircraft/view/acf_ICAO"?aircraft_icao:d.name=="sim/aircraft/view/acf_ui_name"?aircraft_ui_name:d.bytes;
     if(!out)return static_cast<int>(str.size()+1);int n=std::max(0,std::min(count,static_cast<int>(str.size()+1)-off));std::memcpy(out,str.c_str()+off,n);return n;}
 int XPLMRegisterDrawCallback(XPLMDrawCallback_f cb,XPLMDrawingPhase,int,void*) {draw=cb;return 1;}
 int XPLMUnregisterDrawCallback(XPLMDrawCallback_f,XPLMDrawingPhase,int,void*) {draw=nullptr;return 1;}

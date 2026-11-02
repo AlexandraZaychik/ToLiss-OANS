@@ -11,7 +11,7 @@
 #include <utility>
 #include <cstdlib>
 #include "../src/aircraft_profile.hpp"
-#include "../src/aircraft_profile_generator.hpp"
+#include "../src/aircraft/toliss/profile.hpp"
 
 template<class T>T function(HMODULE m,const char* n) {auto p=GetProcAddress(m,n);if(!p)throw std::runtime_error(std::string("Missing export ")+n);return reinterpret_cast<T>(p);}
 int checks=0;
@@ -49,15 +49,18 @@ int main(int argc,char** argv) {
         auto writes=function<int(*)()>(mock,"MockSetters");
         const auto package=std::filesystem::u8path(argv[2]).parent_path().parent_path();
         std::string profile_error;
-        check(profile::load(package/"config","A20N",profile_error),profile_error.c_str());
+        check(profile::load(package/"config/toliss","A20N",profile_error),profile_error.c_str());
         const auto expected_profile=profile::current;
-        const auto base_profile=package/"config/a20n.json";
+        const auto base_profile=package/"config/toliss/a20n.json";
         std::ifstream base_file(base_profile,std::ios::binary);
         const std::string base_text((std::istreambuf_iterator<char>(base_file)),std::istreambuf_iterator<char>());
         base_file.close();
         std::string profile_id;
-        check(profile::identify(std::filesystem::u8path(argv[4]),profile_id,profile_error),profile_error.c_str());
-        const auto id_profile=package/"config"/(profile_id+".json");
+        check(oans::toliss::identify(std::filesystem::u8path(argv[4]),profile_id,profile_error),profile_error.c_str());
+        const auto id_profile=package/"config/toliss"/(profile_id+".json");
+        // Invalid root profiles must never override this family's directory.
+        {std::ofstream root_base(package/"config/a20n.json");root_base<<"{}";}
+        {std::ofstream root_id(package/"config"/(profile_id+".json"));root_id<<"{}";}
         if(!failure_test) {std::filesystem::remove(base_profile);std::filesystem::remove(id_profile);}
         const auto log_path=package/"diagnostics.log";
         plugin=LoadLibraryExW(std::filesystem::u8path(argv[2]).c_str(),nullptr,LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR|LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
@@ -67,6 +70,15 @@ int main(int argc,char** argv) {
         auto message=function<void(*)(int,int,void*)>(plugin,"XPluginReceiveMessage");
         shutdown=stop;
         char name[256],sig[256],desc[256];check(start(name,sig,desc)==1,"native plugin start");check(enable()==1,"enable");
+        auto snapshot=[&] {std::ifstream file(package/"interfaces.txt");std::ostringstream text;text<<file.rdbuf();return text.str();};
+        {std::ifstream file(log_path);std::ostringstream text;text<<file.rdbuf();
+         check(text.str().find("No supported aircraft backend detected")==std::string::npos&&text.str().find("ND BLOCKED")==std::string::npos,"startup does not report unsupported before the deferred aircraft probe");}
+        check(snapshot().find("AIRCRAFT_IDENTIFICATION state=WAITING")!=std::string::npos,"startup snapshot explicitly reports pending identification");
+        check(resources()==24,"4 windows, 18 OANS command handlers, loop and draw callback registered before provider binding");
+        set("AirbusFBW/CaptMAPAvail",0,0);set("AirbusFBW/CoMAPAvail",0,0);
+        advance(.1f); // Aircraft adapters bind only after XPluginStart returns.
+        check(snapshot().find("AIRCRAFT_BACKEND id=toliss manufacturer=\"ToLiss\"")!=std::string::npos&&snapshot().find("AIRCRAFT_IDENTIFICATION state=IDENTIFIED plugin_enabled=1")!=std::string::npos,
+              "first aircraft probe automatically replaces the waiting interface snapshot");
         if(!failure_test) {
             check(profile::load_file(id_profile,profile_error),"startup generated a loadable ID-named aircraft JSON profile");
             check(!std::filesystem::exists(base_profile),"startup never generates a base aircraft profile");
@@ -92,7 +104,7 @@ int main(int argc,char** argv) {
                 "only debug diagnostics.log records display installation and registration evidence");
             if(debug)check(text.find("Environment X-Plane=120000")!=std::string::npos&&text.find("DataRef bind")!=std::string::npos,"debug records simulator version and SDK binding breadcrumbs");
         }
-        check(resources()==24,"4 windows, 18 OANS command handlers, loop and draw callback registered");
+        check(resources()>24,"deferred ToLiss adapter registers MCDU key observers");
         auto menu_count=function<int(*)()>(mock,"MockMenuItems");auto menu_label=function<const char*(*)(int)>(mock,"MockMenuLabel");
         auto menu_click=function<void(*)(int)>(mock,"MockMenuClick");
         check(menu_count()==15&&std::string(menu_label(0))=="Open Airport Map Window"&&std::string(menu_label(1))=="Test","map window, Test and Setting menu hierarchy registered");
@@ -146,7 +158,7 @@ int main(int argc,char** argv) {
         auto session_log=[&]() {std::ifstream in(log_path,std::ios::binary);std::ostringstream s;s<<in.rdbuf();return s.str();};
         auto report=[&]() {cmd("toliss_oans/diagnostics");return read(package/"interfaces.txt");};
         check((session_log().find("ND_DRAW health=NO_GAUGE_CALLBACK_YET")!=std::string::npos&&
-            read(package/"detail.log").find("DISPLAY] ND_DISPLAY side=0")!=std::string::npos)==
+            session_log().find("ND_DISPLAY side=0")!=std::string::npos)==
             (std::filesystem::u8path(argv[2]).u8string().find("mock-host-debug")!=std::string::npos),
             "only debug logs missing draw callbacks and ND blocking state without a manual report");
         check(report().find("OANS_EMPTY_MAP message=PLEASE WAIT\n")!=std::string::npos,
@@ -452,7 +464,7 @@ int main(int argc,char** argv) {
         for(int i=0;i<85;++i)advance(.1f);
         check(report().find("observed=0")!=std::string::npos&&std::string(fms_page())=="IDENT","phase one suppresses initial automatic MCDU flipping");
         check(report().find("MCDU_MAJOR mcdu1=DATA mcdu2=DATA")!=std::string::npos,"both major pages initially DATA");
-        cmd("AirbusFBW/MCDU1Init");cmd("AirbusFBW/MCDU1LSK1R");
+        cmd("AirbusFBW/MCDU1Fpln");cmd("AirbusFBW/MCDU1LSK6R");
         for(int i=0;i<85;++i)advance(.1f);
         check(std::string(fms_page())=="IDENT"&&report().find("saved_page=A/C STATUS")!=std::string::npos,
               "MCDU1 trigger restores untouched MCDU2 through DATA and LSK4L");
@@ -469,10 +481,21 @@ int main(int argc,char** argv) {
         menu_click(12);menu_click(12);
         set("AirbusFBW/ECAMFlightPhase",0,1);
         advance(.1f); // Rebind the observers after re-enabling sampling.
-        cmd("AirbusFBW/MCDU2KeyA");cmd("AirbusFBW/MCDU1LSK1R");
+        cmd("AirbusFBW/MCDU2KeyA");cmd("AirbusFBW/MCDU1LSK6R");
+        for(int i=0;i<85;++i)advance(.1f);
+        check(std::string(fms_page())=="IDENT"&&report().find("saved_page=A/C STATUS")!=std::string::npos,
+              "visible A/C STATUS survives sampling after an ordinary MCDU2 key");
+        cmd("AirbusFBW/MCDU2Data");cmd("AirbusFBW/MCDU1LSK6R");
         for(int i=0;i<85;++i)advance(.1f);
         check(std::string(fms_page())=="DATA"&&report().find("saved_page=DATA")!=std::string::npos,
-              "ordinary MCDU2 key ends untouched restoration without changing its DATA parent");
+              "visible DATA INDEX still restores to DATA INDEX");
+        cmd("AirbusFBW/MCDU2LSK4L");
+        fms_plan("PPOS","");cmd("AirbusFBW/MCDU1LSK6R");
+        for(int i=0;i<180;++i)advance(.1f);
+        check(std::string(fms_page())=="IDENT"&&report().find("saved_page=A/C STATUS")!=std::string::npos&&
+              report().find("plan_status=NO FLIGHT PLAN")!=std::string::npos,
+              "empty plan returns operated MCDU2 to A/C STATUS without a crew retry");
+        fms_plan("ZUCK02L","ZUUU02L");
         const std::pair<const char*,const char*> major_keys[]={
             {"DirTo","DIR"},{"Prog","PROG"},{"Perf","PERF"},{"Init","INIT"},{"Data","DATA"},
             {"Fpln","F-PLN"},{"RadNav","RAD NAV"},{"FuelPred","FUEL PRED"},
@@ -487,7 +510,7 @@ int main(int argc,char** argv) {
         cmd("AirbusFBW/MCDU1LSK1L");cmd("AirbusFBW/MCDU2LSK4L");
         cmd("AirbusFBW/MCDU1SlewRight");cmd("AirbusFBW/MCDU2KeyA");
         check(report().find("MCDU_MAJOR mcdu1=PERF mcdu2=DATA")!=std::string::npos,"LSK, arrow and character keys preserve major pages");
-        cmd("AirbusFBW/MCDU1Init");cmd("AirbusFBW/MCDU1LSK1R");
+        cmd("AirbusFBW/MCDU1Fpln");cmd("AirbusFBW/MCDU1LSK6R");
         for(int i=0;i<85;++i)advance(.1f);
         check(report().find("confirmations=1 complete=1")!=std::string::npos,"one full selected-key capture completes automatic session in phase one");
         set("AirbusFBW/ECAMFlightPhase",0,2);
@@ -502,12 +525,13 @@ int main(int argc,char** argv) {
         auto fms_report=report();
         check(fms_report.find("origin=ZUCK departure_runway=02L destination=ZUUU arrival_runway=02L")!=std::string::npos,"actual .xpl reads byte DataRefs and publishes FMS endpoints");
         check(row(0).find("not_in_plan=1")!=std::string::npos,"native selected ZTEST is outside observed ZUCK to ZUUU plan");
-        check(std::string(fms_page())=="DATA","actual .xpl restores DATA parent from A/C STATUS subpage");
+        check(std::string(fms_page())=="IDENT"&&fms_report.find("saved_page=A/C STATUS")!=std::string::npos,
+              "actual .xpl restores visible A/C STATUS after prior MCDU2 navigation");
         check(fms_report.find("alternate=ZALT ")!=std::string::npos,"actual .xpl reads alternate from FUEL PRED");
         check(fms_report.find("confirmations=1 complete=1")!=std::string::npos,"first full automatic capture completes the session");
         check(fms_report.find("MCDU_MAJOR mcdu1=PERF mcdu2=DATA")!=std::string::npos,"sampler navigation does not overwrite crew major pages");
         set("AirbusFBW/ECAMFlightPhase",0,5);
-        fms_plan("ZBAA18R","ZSSS36L");cmd("AirbusFBW/MCDU1Init");cmd("AirbusFBW/MCDU1LSK1R");
+        fms_plan("ZBAA18R","ZSSS36L");cmd("AirbusFBW/MCDU1Fpln");cmd("AirbusFBW/MCDU1LSK6R");
         for(int i=0;i<85;++i)advance(.1f);
         check(report().find("origin=ZUCK departure_runway=02L destination=ZSSS arrival_runway=36L")!=std::string::npos,
               "phase five is refreshed before crew capture and freezes the existing origin after auto completion");
@@ -528,12 +552,12 @@ int main(int argc,char** argv) {
         menu_click(12);menu_click(12);
         set("AirbusFBW/ECAMFlightPhase",0,5);
         for(int i=0;i<85;++i)advance(.1f);
-        check(std::string(fms_page())=="DATA"&&report().find("observed=0")!=std::string::npos&&
+        check(std::string(fms_page())=="IDENT"&&report().find("observed=0")!=std::string::npos&&
               report().find("ecam_phase=5 confirmations=0 complete=0")!=std::string::npos,
               "phase five blocks automatic detection without latching a successful capture");
-        cmd("AirbusFBW/MCDU1Init");cmd("AirbusFBW/MCDU1LSK1R");
+        cmd("AirbusFBW/MCDU1Fpln");cmd("AirbusFBW/MCDU1LSK6R");
         for(int i=0;i<49;++i)advance(.1f);
-        check(std::string(fms_page())=="DATA"&&report().find("observed=0")!=std::string::npos,
+        check(std::string(fms_page())=="IDENT"&&report().find("observed=0")!=std::string::npos,
               "selected-key capture waits five seconds even when phase five blocks automatic capture");
         for(int i=0;i<40;++i)advance(.1f);
         check(report().find("origin= departure_runway= destination=ZUUU arrival_runway=02L")!=std::string::npos,
@@ -557,34 +581,69 @@ int main(int argc,char** argv) {
         click(398,16);for(int i=0;i<40;++i) {advance(.1f);Sleep(2);}
         fms_plan("ZUCK","ZUUU");cmd("AirbusFBW/MCDU2Fpln");cmd("AirbusFBW/MCDU2LSK6R");for(int i=0;i<85;++i)advance(.1f);
         check(report().find("origin=ZUCK departure_runway= destination=ZUUU arrival_runway=")!=std::string::npos,"native next sample clears deselected runways");
-        fms_plan("PPOS","");cmd("AirbusFBW/MCDU1Init");cmd("AirbusFBW/MCDU1LSK1R");for(int i=0;i<85;++i)advance(.1f);
+        fms_plan("PPOS","");cmd("AirbusFBW/MCDU1Fpln");cmd("AirbusFBW/MCDU1LSK6R");for(int i=0;i<85;++i)advance(.1f);
         check(report().find("plan_status=NO FLIGHT PLAN origin= departure_runway= destination= arrival_runway=")!=std::string::npos,"native PPOS sample clears old airports");
         fms_plan("ZUCK02L","ZUUU02L");
         cmd("AirbusFBW/MCDU2FuelPred");advance(.1f);
         check(std::string(fms_page())=="FUEL","crew input passes through sampler observer");
         for(int i=0;i<44;++i)advance(.1f);
-        check(std::string(fms_page())=="FUEL"&&report().find("plan_status=NO FLIGHT PLAN")!=std::string::npos,"ordinary page key defers the pending crew retry for five seconds");
+        check(std::string(fms_page())=="FUEL"&&report().find("plan_status=NO FLIGHT PLAN")!=std::string::npos,"ordinary page key does not retry an empty-plan result");
         for(int i=0;i<40;++i)advance(.1f);
+        check(std::string(fms_page())=="FUEL"&&report().find("plan_status=NO FLIGHT PLAN")!=std::string::npos&&
+              session_log().find("trigger detect F-PLN LSK6R retry 1")==std::string::npos,
+              "empty-plan result stays idle after the retry delay despite a silently completed plan");
+        cmd("AirbusFBW/MCDU1LSK6R");for(int i=0;i<85;++i)advance(.1f);
         check(std::string(fms_page())=="FUEL"&&report().find("plan_status=CONNECTED")!=std::string::npos&&
-              session_log().find("trigger detect INIT LSK1R retry 1 success")!=std::string::npos,
-              "failed selected-key capture retries with its original page and key source");
+              session_log().find("trigger detect F-PLN LSK6R success")!=std::string::npos,
+              "a new selected key refreshes the plan after an empty-plan result");
         fms_alternate("ZBAA");
         cmd("AirbusFBW/MCDU2LSK6R");for(int i=0;i<70;++i)advance(.1f);
-        check(report().find("alternate=ZALT ")!=std::string::npos,"R6 outside F-PLN does not request sampling after retry success");
+        check(report().find("alternate=ZALT ")!=std::string::npos,"R6 outside F-PLN does not request sampling after a successful capture");
         fms_alternate("ZALT");
         cmd("AirbusFBW/MCDU1Fpln");cmd("AirbusFBW/MCDU1LSK6R");
         for(int i=0;i<49;++i)advance(.1f);
         check(std::string(fms_page())=="FUEL","selected key waits five seconds before navigating MCDU2");
         for(int i=0;i<40;++i)advance(.1f);
         check(std::string(fms_page())=="FUEL"&&report().find("origin=ZUCK departure_runway=02L destination=ZUUU arrival_runway=02L")!=std::string::npos,"sampling resumes and restores crew-selected FUEL PRED");
+        auto init_fields=function<void(*)(int,const char*,const char*,const char*)>(mock,"MockFmsInit");
         for(int unit:{1,2}) {
-            const char* alternate=unit==1?"ZBAA":"ZALT";
-            fms_alternate(alternate);
+            const char* origin=unit==1?"ZBAA":"ZUCK";
+            const char* destination=unit==1?"ZSSS":"ZUUU";
+            const char* alternate=unit==1?"ZSPD":"ZALT";
             cmd(("AirbusFBW/MCDU"+std::to_string(unit)+"Init").c_str());
-            cmd(("AirbusFBW/MCDU"+std::to_string(unit)+"LSK2L").c_str());
-            for(int i=0;i<85;++i)advance(.1f);
-            check(report().find(std::string("alternate=")+alternate+" saved_page=")!=std::string::npos,"INIT L2 on either MCDU refreshes alternate after automatic capture completed");
+            init_fields(unit,origin,destination,alternate);
+            const auto other_page=std::string(fms_page());
+            cmd(("AirbusFBW/MCDU"+std::to_string(unit)+"LSK1R").c_str());advance(.1f);
+            check(report().find(std::string("destination=")+destination+" arrival_runway=")!=std::string::npos&&
+                  std::string(fms_page())==other_page,"INIT R1 reads the operated MCDU within one tick without MCDU2 page navigation");
+            cmd(("AirbusFBW/MCDU"+std::to_string(unit)+"LSK2L").c_str());advance(.1f);
+            check(report().find(std::string("alternate=")+alternate+" saved_page=")!=std::string::npos&&
+                  std::string(fms_page())==other_page,"INIT L2 reads only the operated MCDU alternate without waiting five seconds");
+            for(int i=0;i<70;++i)advance(.1f);
+            check(std::string(fms_page())==other_page,"direct INIT input does not leave a delayed MCDU2 transaction");
         }
+        for(int unit:{1,2}) {
+            const char* destination=unit==1?"ZSSS":"ZUUU";
+            fms_plan("ZBAA",destination);
+            cmd(("AirbusFBW/MCDU"+std::to_string(unit)+"SecFpln").c_str());
+            const auto original_page=std::string(fms_page());
+            cmd(("AirbusFBW/MCDU"+std::to_string(unit)+"LSK4L").c_str());
+            for(int i=0;i<49;++i)advance(.1f);
+            check(std::string(fms_page())==original_page,"SEC L4 on either MCDU waits five seconds before navigation");
+            cmd("AirbusFBW/MCDU1KeyA");
+            for(int i=0;i<49;++i)advance(.1f);
+            check(std::string(fms_page())==original_page,"crew input defers the pending SEC L4 capture");
+            for(int i=0;i<40;++i)advance(.1f);
+            check(report().find(std::string("destination=")+destination+" arrival_runway=")!=std::string::npos&&
+                  std::string(fms_page())==original_page&&
+                  session_log().find("trigger detect SEC F-PLN LSK4L success")!=std::string::npos,
+                  "SEC L4 on either MCDU captures the active plan and restores MCDU2");
+        }
+        cmd("AirbusFBW/MCDU2FuelPred");fms_plan("ZBAA","ZSPD");cmd("AirbusFBW/MCDU2LSK4L");
+        for(int i=0;i<70;++i)advance(.1f);
+        check(report().find("destination=ZUUU arrival_runway=")!=std::string::npos,
+              "L4 outside SEC F-PLN does not trigger delayed capture");
+        fms_plan("ZUCK02L","ZUUU02L");
         const std::pair<const char*,const char*> parent_roots[]={
             {"Data","DATA"},{"DirTo","DIR"},{"Init","INIT"},{"Fpln","FPLN"},
             {"FuelPred","FUEL"},{"RadNav","RADNAV"},{"Menu","MENU"},{"SecFpln","SEC"},
@@ -698,6 +757,77 @@ int main(int argc,char** argv) {
               "user-aircraft unload and reload clear the previous map and rearm first opening");
         for(int i=0;i<80;++i) {advance(.1f);Sleep(2);}
         cmd("toliss_oans/capt_airport");check(focus()==1,"ND search can acquire focus during session");
+        auto provider=function<void(*)(int)>(mock,"MockAircraftProvider");
+        auto ui_name=function<void(*)(const char*)>(mock,"MockAircraftUiName");
+        auto signatures=function<void(*)(int)>(mock,"MockTolissSignatures");
+        auto signature_name=function<void(*)(const char*)>(mock,"MockTolissDataRefName");
+        provider(0);message(0,106,nullptr);message(0,102,nullptr);
+        for(int i=0;i<60;++i)advance(.1f);
+        const auto unsupported=report();
+        check(unsupported.find("AIRCRAFT_BACKEND id=NONE")!=std::string::npos,"same Airbus ICAO without provider does not select ToLiss");
+        check(unsupported.find("FMS source=NONE")!=std::string::npos&&unsupported.find("profile_match=0 aircraft_match=0")!=std::string::npos,"unsupported backend drops flight plan and geometry");
+        check(unsupported.find("AirbusFBW/")==std::string::npos,"unsupported backend has no ToLiss data bindings");
+        check(resources()==24,"switching away unregisters every ToLiss key observer");
+        ui_name("Custom ToLiSs A320 Std Def");
+        for(int i=0;i<60;++i)advance(.1f);
+        check(report().find("AIRCRAFT_BACKEND id=toliss")!=std::string::npos,"mixed-case UI name identifies ToLiss without dedicated DataRefs");
+        check(report().find("profile_match=1 aircraft_match=0")!=std::string::npos,"name-only identification loads family profile while waiting for ND interfaces");
+        check(resources()==24,"name-only identity cannot start MCDU activity before ND interfaces are ready");
+        ui_name("Other Airbus A320");
+        signature_name("custom/Vendor_ToLiSs/new_identity");
+        provider(1);
+        for(int i=0;i<60;++i)advance(.1f);
+        check(report().find("AIRCRAFT_BACKEND id=toliss")!=std::string::npos,"arbitrary registered DataRef containing ToLiSs reselects ToLiss without a matching UI name");
+        check(report().find("profile_match=1 aircraft_match=1")!=std::string::npos,"late provider reloads geometry");
+        check(report().find("MCDU_MAJOR mcdu1=DATA mcdu2=DATA")!=std::string::npos,"new source starts fresh page tracking");
+        check(session_log().find((package/"config"/"toliss"/(profile_id+".json")).u8string())!=std::string::npos,"profile lookup and generation use config/toliss despite invalid root profiles");
+        signatures(0);
+        for(int i=0;i<60;++i)advance(.1f);
+        check(report().find("AIRCRAFT_BACKEND id=NONE")!=std::string::npos,"AirbusFBW ND interfaces alone do not identify the vendor");
+        ui_name("TOLISS A320");
+        for(int i=0;i<60;++i)advance(.1f);
+        check(report().find("profile_match=1 aircraft_match=1")!=std::string::npos,"UI name alone selects and readies the adapter when ND interfaces exist");
+        const auto lr_model=std::filesystem::u8path(argv[3])/"renamed-lr-aircraft.acf";
+        {std::ofstream acf(lr_model);acf<<"I\n1200\nACF\nP acf/_studio Laminar Research\nP acf/_ICAO A333\n";}
+        auto configure=function<void(*)(const char*,const char*,const char*)>(mock,"MockConfigure");
+        auto icao=function<void(*)(const char*)>(mock,"MockAircraftIcao");
+        icao("A333");signatures(1); // Keep conflicting ToLiss names/UI to exercise studio precedence.
+        configure(argv[2],argv[3],lr_model.u8string().c_str());
+        function<void(*)()>(mock,"MockLrFms")();
+        set("laminar/A333/data/flight_phase",0,2);
+        set("laminar/A333/nd1/display_state",0,3);
+        message(0,106,nullptr);message(0,102,nullptr);
+        for(int i=0;i<140;++i)advance(.1f);
+        check(snapshot().find("AIRCRAFT_BACKEND id=lr manufacturer=\"Laminar Research\"")!=std::string::npos,"switch to LR automatically refreshes the interface snapshot with its manufacturer");
+        const auto lr_report=report();
+        check(session_log().find("Aircraft manufacturer=\"Laminar Research\" family=lr ICAO=A333 model=")!=std::string::npos,"ordinary log records identified manufacturer, family, ICAO and model");
+        check(lr_report.find("AIRCRAFT_BACKEND id=lr")!=std::string::npos,"ACF studio selects LR despite renamed folder and conflicting ToLiss registry/UI");
+        check(lr_report.find("profile_match=1 aircraft_match=1")!=std::string::npos,"LR loads its geometry and binds its own display interfaces");
+        check(lr_report.find("FMS source=LR_MCDU2")!=std::string::npos&&lr_report.find("AirbusFBW/")==std::string::npos,"LR uses its own MCDU source without ToLiss bindings");
+        check(lr_report.find("origin=ZUUU departure_runway=02L destination=ZBAA arrival_runway=01 alternate=ZBAD")!=std::string::npos,
+              "LR native port samples both runway endpoints and alternate");
+        check(function<int(*)()>(mock,"MockLrFplnPresses")()==4,"LR enters and verifies F-PLN with two spaced presses each");
+        check(std::string(fms_page())=="IDENT","LR native capture restores A/C STATUS");
+        set("laminar/A333/nd1/display_state",0,0);
+        check(session_log().find((package/"config"/"lr"/"a333.json").u8string())!=std::string::npos,"LR uses its own lowercase ICAO profile");
+        auto observers=function<int(*)(const char*)>(mock,"MockCommandObservers");
+        const auto lr_resources=resources();
+        check(observers("AirbusFBW/")==0&&observers("sim/FMS")>0,"LR replaces ToLiss observers with its own FMS key observers");
+        check(report().find("OANS_switch side=0 visible=0")!=std::string::npos,"LR powered-off display is not overlaid");
+        set("laminar/A333/nd1/display_state",0,3);set("laminar/A333/knobs/EFIS_mode_pos_capt",0,3);
+        set("sim/cockpit2/EFIS/map_range_nm",0,10);set("laminar/A333/ND/draw_map_mode_capt",0,2);
+        for(const char* ref:{"laminar/A333/adiru1/att_status","laminar/A333/adiru1/hdg_status","laminar/A333/adiru1/lrn_status"})set(ref,0,1);
+        for(int i=0;i<60;++i)advance(.1f);
+        check(report().find("OANS_switch side=0 visible=1")!=std::string::npos,"LR powered aligned ARC display exposes OANS control at 10 NM");
+        check(report().find("OANS_switch side=1 visible=0")!=std::string::npos,"LR FO remains independent and off");
+        set("laminar/A333/buttons/pfd_nd_swap_capt_status",0,1);advance(.1f);
+        check(report().find("OANS_switch side=0 visible=0")!=std::string::npos,"LR PFD/ND swap removes the overlay");
+        set("laminar/A333/buttons/pfd_nd_swap_capt_status",0,0);
+        check(resources()==lr_resources&&observers("AirbusFBW/")==0,"LR display operation does not duplicate listeners or bind ToLiss keys");
+        configure(argv[2],argv[3],argv[4]);icao("A20N");
+        message(0,106,nullptr);message(0,102,nullptr);
+        for(int i=0;i<60;++i)advance(.1f);
+        check(report().find("AIRCRAFT_BACKEND id=toliss")!=std::string::npos,"switching back from LR reselects ToLiss");
         disable();
         check(report().find("RWY_AHEAD_TEST active=0 pending=0")!=std::string::npos,"disable clears forced test warning");
         cmd("toliss_oans/capt_airport");

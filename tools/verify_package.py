@@ -8,7 +8,9 @@ import argparse
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--flavor', choices=('both', 'release', 'debug'), default='both')
-selected = parser.parse_args().flavor
+parser.add_argument('--dist-only', action='store_true', help='Verify current builds without checking older output exports')
+args = parser.parse_args()
+selected = args.flavor
 
 root = Path(__file__).resolve().parents[1]
 version = re.search(r'project\(ToLissOANS VERSION ([0-9.]+)', (root / 'CMakeLists.txt').read_text(encoding='utf-8')).group(1)
@@ -34,8 +36,11 @@ def verify(package, flavor):
     allowed = {"kernel32.dll", "msvcrt.dll", "opengl32.dll", "glu32.dll", "gdi32.dll", "user32.dll", "winhttp.dll", "xplm_64.dll"}
     assert {s.lower() for s in imports} <= allowed, imports
     assert "experimental_write_brakes" not in (package / "config.ini").read_text(encoding="utf-8")
-    profile = json.loads((package / "config/a20n.json").read_text(encoding="utf-8"))
+    profile = json.loads((package / "config/toliss/a20n.json").read_text(encoding="utf-8"))
+    assert not list((package / "config").glob("*.json")), "Aircraft profiles belong in family subdirectories"
     assert set(profile) == {"nd_brightness", "pfd_brightness", "nd_uv", "pfd_uv", "nd_corners"}
+    lr_profile = json.loads((package / 'config/lr/a333.json').read_text(encoding='utf-8'))
+    assert lr_profile == json.loads((root / 'config/lr/a333.json').read_text(encoding='utf-8')), 'LR profile differs from current source'
     assert not list(package.rglob("XPLM_64.dll")), "Test mock SDK must never ship"
     expected_exes = {'CollectLogs.exe', 'tools/7zip/7z.exe'} if is_debug else set()
     assert {p.relative_to(package).as_posix() for p in package.rglob('*.exe')} == expected_exes, 'Unexpected helper or offline test host'
@@ -65,6 +70,8 @@ for flavor, directory in (("release", "dist/ToLissOANS"), ("debug", "dist/ToLiss
         continue
     reports[flavor] = verify(root / directory, flavor)
 for flavor, directory in (("release", "output/00_ToLissOANS"), ("debug", "output/00_ToLissOANS-debug")):
+    if args.dist_only:
+        break
     if selected != 'both' and flavor != selected:
         continue
     package = root / directory

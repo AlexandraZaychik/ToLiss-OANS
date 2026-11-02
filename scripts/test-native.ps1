@@ -83,7 +83,7 @@ Push-Location $projectRoot
 try {
     & $compiler '-std=c++17' '-O2' '-static' '-shared' '-DXPLM=1' '-DIBM=1' '-DAPL=0' '-DLIN=0' '-DXPLM200' '-DXPLM210' '-DXPLM300' '-DXPLM301' '-DXPLM303' "-I$SdkRoot\CHeaders\XPLM" 'tests/mock_xplm.cpp' '-o' (Join-Path $testRoot 'XPLM_64.dll')
     if ($LASTEXITCODE -ne 0) { throw 'Mock SDK compilation failed' }
-    & $compiler '-std=c++17' '-O2' '-static' '-Ivendor/xptools/Utils' 'tests/plugin_host.cpp' 'src/aircraft_profile_generator.cpp' (Join-Path $projectRoot 'build/dsf/libdsf.a') '-o' (Join-Path $testRoot 'plugin_host.exe')
+    & $compiler '-std=c++17' '-O2' '-static' '-Isrc' '-Ivendor/xptools/Utils' 'tests/plugin_host.cpp' 'src/aircraft/toliss/profile.cpp' (Join-Path $projectRoot 'build/dsf/libdsf.a') '-o' (Join-Path $testRoot 'plugin_host.exe')
     if ($LASTEXITCODE -ne 0) { throw 'Native host compilation failed' }
     & (Join-Path $testRoot 'plugin_host.exe') (Join-Path $testRoot 'XPLM_64.dll') (Join-Path $package '64\win.xpl') (Join-Path $testRoot 'sim') (Join-Path $AircraftPath 'a320.acf') '--test-failure-cleanup'
     if ($LASTEXITCODE -ne 0) { throw 'Native host failure-cleanup regression failed' }

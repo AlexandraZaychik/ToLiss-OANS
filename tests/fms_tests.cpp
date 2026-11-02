@@ -1,7 +1,8 @@
-#include "fms.hpp"
+#include "aircraft/toliss/mcdu.hpp"
 #include <iostream>
 #include <stdexcept>
 using namespace oans;
+using namespace oans::toliss;
 int checks=0;
 void check(bool v,const char* text){++checks;if(!v)throw std::runtime_error(text);}
 McduScreen plan(std::string from="ZUCK02L",std::string to="ZUUU02L") {
@@ -103,7 +104,7 @@ void automatic_tests() {
     manual.activity(112,true);
     check(manual.tick(117,ident())=="DirTo","selected key can retry after scratchpad is cleared");
     manual.activity(117.1,false);
-    check(!manual.busy()&&!manual.wants_screen(122.09)&&manual.wants_screen(122.1),"crew interruption rearms capture after five quiet seconds");
+    check(!manual.busy()&&!manual.wants_screen(1000),"crew interruption ends the attempt without rearming capture");
     FmsAutoCapture crew;
     crew.observe(parse_fpln(plan("ZUCK","")));
     check(!crew.complete(),"partial crew capture keeps automatic fallback available");
@@ -220,13 +221,14 @@ void partial_and_phase_tests() {
               "origin-only capture publishes immediately for either trigger");
         automatic.observe(a.sampled_plan());
         check(!automatic.complete(),"origin-only capture keeps automatic fallback available");
+        if(crew)check(!a.wants_screen(1000),"origin-only crew capture does not retry");
         if(crew)a.activity(10,true);
         cycle(a,15,data(),plan("PPOS","ZUUU02L"));
         check(a.plan().origin.airport=="ZUCK"&&a.plan().origin.runway=="02L"&&a.plan().destination.airport=="ZUUU"&&!a.complete_pair(),
               "destination-only capture fills destination and retains cached origin");
         automatic.observe(a.sampled_plan());
         check(!automatic.complete(),"merged halves never masquerade as one complete capture");
-        if(crew)check(a.wants_screen(22.05),"partial crew capture still retries despite both cached airports being present");
+        if(crew)check(!a.wants_screen(1000),"destination-only crew capture does not retry even with cached origin");
         cycle(a,25,data(),plan("ZBAA",""));
         check(a.plan().origin.airport=="ZBAA"&&a.plan().origin.runway.empty()&&a.plan().destination.airport=="ZUUU"&&a.plan().alternate=="ZALT",
               "origin-only update retains destination and alternate while clearing deselected origin runway");
@@ -274,25 +276,33 @@ void retry_tests() {
     check(a.crew_retry()==0&&!a.wants_screen(109.99)&&a.wants_screen(110),"new selected key resets exhausted retry budget");
     check(a.tick(110,ident())=="DirTo"&&a.crew_retry()==1,"first retry starts with the original crew source");
     a.activity(110.1,false);
-    check(!a.busy()&&!a.wants_screen(115.09)&&a.wants_screen(115.1),"interruption restarts five second quiet period");
-    a.tick(115.1,blocked);
-    check(a.crew_retry()==0,"ordinary key interrupting a crew transaction refreshes its retry budget");
-    cycle(a,120.1,data(),plan());
+    check(!a.busy()&&!a.wants_screen(1000),"ordinary key interrupting a crew transaction does not retry");
+    a.activity(111,true);a.tick(116,blocked);
+    check(a.crew_retry()==0,"a new selected key starts a fresh retry budget");
+    cycle(a,121,data(),plan());
     check(a.crew_triggered()&&a.crew_retry()==1&&!a.wants_screen(1000),"successful retry stops future retries");
 
-    a.reset(false);a.activity(0,true);
-    auto draft=data();draft.fields["titley"]="TMPY";a.tick(5,draft);
-    check(!a.wants_screen(9.99)&&a.wants_screen(10),"temporary plan failure also schedules a five second retry");
+    for(const char* marker:{"TMPY","TEMPY"}) {
+        a.reset(false);a.activity(0,true);
+        auto draft=data();draft.fields["titley"]=marker;a.tick(5,draft);
+        check(!a.wants_screen(9.99)&&a.wants_screen(10),"temporary plan entry guard schedules a five second retry");
+        a.tick(10,draft);
+        check(!a.wants_screen(1000),"temporary plan entry guard also exhausts after one retry");
+    }
+    a.reset(false);a.activity(0,true);a.tick(5,blocked);
     a.activity(6,false);
     check(!a.wants_screen(10.99)&&a.wants_screen(11),"ordinary keys defer a pending retry without starting an unrelated capture");
 
     a.reset(false);a.activity(0,true);cycle(a,5,data(),plan("PPOS",""));
-    check(!a.wants_screen(12.04)&&a.wants_screen(12.05),"empty-plan result retries five seconds after restoration completes");
+    check(!a.wants_screen(1000),"empty-plan result ends the crew round without retrying");
     a.reset(false);a.activity(0,true);a.tick(5,ident());a.tick(9,ident());
-    check(a.tick(9.1,ident())=="Data","timed-out crew attempt restores before retrying");
+    check(a.tick(9.1,ident())=="Data","timed-out crew attempt still restores the original page");
     check(a.tick(9.4,data())=="LSK4L","timed-out untouched screen still restores A/C STATUS");
     a.tick(9.7,ident());
-    check(!a.wants_screen(14.69)&&a.wants_screen(14.7),"timeout retry starts five seconds after restoration");
+    check(!a.wants_screen(1000),"page timeout does not schedule a crew retry");
+    a.reset(false);a.activity(0,true);a.tick(5,ident());a.tick(9,ident());a.tick(9.1,ident());
+    a.tick(13,page("UNKNOWN"));
+    check(a.status()=="RESTORE FAILED"&&!a.wants_screen(1000),"restore failure does not schedule a crew retry");
 
     a.reset(false);a.activity(0,false);a.request();a.stop_automatic_capture();
     check(!a.wants_screen(10),"phase cutoff drops automatic requests waiting for crew idle");
@@ -333,4 +343,35 @@ void tracked_parent_tests() {
         check(a.cancel().empty(),"crew interruption never restores over user input");
     }
 }
-int main(){try{tests();partial_and_phase_tests();retry_tests();tracked_parent_tests();std::cout<<"PASS "<<checks<<" FMS checks\n";}catch(const std::exception& e){std::cerr<<"FAIL "<<e.what()<<'\n';return 1;}}
+void direct_init_tests() {
+    auto init=[](std::string from,std::string to,std::string alternate="ZSPD") {
+        auto s=page("INIT");s.fields["label1w"]=" CO RTE        FROM/TO";s.fields["label2w"]="ALTN/CO RTE";
+        s.fields["cont1b"]=std::string(15,' ')+from+"/"+to;s.fields["cont2b"]=alternate+"/----------";return s;
+    };
+    FmsSampler a(false);
+    auto partial=init("    ","ZUWL");partial.fields["cont1b"]=std::string(20,' ')+"ZUWL";
+    partial.fields["cont1a"]=std::string(19,' ')+"/";partial.fields["cont1s"]="EEEEEEEEEE     EEEE";
+    check(a.capture_init(0,partial,false)&&a.plan().destination.airport=="ZUWL"&&a.plan().origin.airport.empty(),
+          "INIT reads the blue destination with an amber slash and ignores small placeholder glyphs");
+    check(!a.complete_pair()&&!a.wants_screen(1000),"partial direct INIT read never schedules navigation sampling");
+    check(a.capture_init(.1,init("ZBAA","ZSSS"),false)&&a.complete_pair()&&a.plan().origin.airport=="ZBAA"&&
+          a.plan().destination.airport=="ZSSS","direct INIT FROM/TO publishes both airports immediately");
+    check(a.capture_init(.2,init("ZUCK","ZUUU","ZSPD"),true)&&a.plan().alternate=="ZSPD"&&
+          a.plan().origin.airport=="ZBAA"&&a.plan().destination.airport=="ZSSS","INIT L2 updates only alternate");
+    check(a.capture_init(.3,init("ZBAA","ZSSS","----"),true)&&a.plan().alternate.empty(),"INIT L2 accepts cleared alternate");
+    auto input=init("ZUCK","ZUUU");input.fields["spw"]="ZUCK/ZUUU";input.fields["spa"]="INVALID ENTRY";
+    check(a.capture_init(.4,input,false)&&a.plan().destination.airport=="ZUUU", "direct INIT ignores nonempty scratchpad and reads the page fields");
+    const auto generation=a.generation();
+    for(const char* marker:{"TMPY","TEMPY"}) {
+        auto draft=init("ZBAA","ZSSS");draft.fields["titley"]=marker;
+        check(!a.capture_init(1,draft,false)&&a.status()=="MCDU BUSY","direct INIT refuses temporary plans");
+    }
+    check(!a.capture_init(1,data(),false)&&a.generation()==generation,"wrong page and temporary INIT never change published data");
+    a.reset(false);cycle(a,0,data(),plan());
+    a.capture_init(3,init("ZUCK","ZUUU"),false);
+    check(a.plan().origin.runway=="02L"&&a.plan().destination.runway=="02L","same INIT airports preserve sampled runways");
+    a.set_flight_phase(5);a.capture_init(4,init("ZBAA","ZSSS"),false);
+    check(a.plan().origin.airport=="ZUCK"&&a.plan().origin.runway=="02L"&&a.plan().destination.airport=="ZSSS"&&
+          a.plan().destination.runway.empty()&&a.plan().alternate.empty(),"direct INIT respects phase-five origin protection and clears stale destination details");
+}
+int main(){try{tests();partial_and_phase_tests();retry_tests();tracked_parent_tests();direct_init_tests();std::cout<<"PASS "<<checks<<" FMS checks\n";}catch(const std::exception& e){std::cerr<<"FAIL "<<e.what()<<'\n';return 1;}}

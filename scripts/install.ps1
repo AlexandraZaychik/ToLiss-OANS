@@ -1,12 +1,15 @@
 [CmdletBinding(SupportsShouldProcess)]
-param([string]$AircraftPath = 'G:\SteamLibrary\steamapps\common\X-Plane 12\Aircraft\ToLissA320_V1p3p2')
+param(
+    [string]$AircraftPath = 'G:\SteamLibrary\steamapps\common\X-Plane 12\Aircraft\ToLissA320_V1p3p2',
+    [switch]$StageNewWhileRunning
+)
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $source = Join-Path $projectRoot 'dist\ToLissOANS'
 $aircraftFull = [IO.Path]::GetFullPath($AircraftPath).TrimEnd('\','/')
-if (!(Test-Path -LiteralPath (Join-Path $aircraftFull 'a320.acf'))) { throw 'Expected ToLiss A320 aircraft directory with a320.acf' }
+if (!(Get-ChildItem -LiteralPath $aircraftFull -File -Filter '*.acf')) { throw 'Expected an aircraft directory containing an ACF model' }
 if (!(Test-Path -LiteralPath (Join-Path $source '64\win.xpl'))) { throw 'Build the plugin first: scripts\build.ps1' }
-if (Get-Process -Name 'X-Plane' -ErrorAction SilentlyContinue) { throw 'Close X-Plane before installing. This script does not start or stop it.' }
+$simulatorRunning = [bool](Get-Process -Name 'X-Plane' -ErrorAction SilentlyContinue)
 $pluginRoot = [IO.Path]::GetFullPath((Join-Path $aircraftFull 'plugins'))
 $target = [IO.Path]::GetFullPath((Join-Path $pluginRoot '00_ToLissOANS'))
 $candidateNames = @('00_ToLissOANS','zz_ToLissOANS','ToLissOANS')
@@ -16,6 +19,9 @@ foreach ($candidatePath in $candidatePaths) {
     if ([IO.Path]::GetDirectoryName($candidatePath) -ne $pluginRoot) { throw 'Unexpected installation target' }
 }
 $existingPaths = @($candidatePaths | Where-Object { Test-Path -LiteralPath $_ })
+if ($simulatorRunning -and (!$StageNewWhileRunning -or $existingPaths.Count -gt 0)) {
+    throw 'Close X-Plane before replacing an installed plugin. -StageNewWhileRunning allows only a new, not-yet-loaded plugin directory.'
+}
 if ($existingPaths.Count -gt 1) { throw 'Multiple OANS plugin directories exist; inspect duplicate plugins before installing' }
 $existingTarget = if ($existingPaths.Count -eq 1) { $existingPaths[0] } else { $null }
 if ($existingTarget) {

@@ -33,7 +33,7 @@ try {
         & (Join-Path $buildDir 'lua_vertex_buffer_tests.exe')
         if ($LASTEXITCODE -ne 0) { throw 'Lua vertex buffer tests failed' }
     }
-    & $compiler @common '-Ivendor/xptools/Utils' 'tests/aircraft_profile_generator_tests.cpp' 'src/aircraft_profile_generator.cpp' (Join-Path $buildDir 'dsf/libdsf.a') '-o' (Join-Path $buildDir 'aircraft_profile_generator_tests.exe')
+    & $compiler @common '-Ivendor/xptools/Utils' 'tests/aircraft_profile_generator_tests.cpp' 'src/aircraft/toliss/profile.cpp' (Join-Path $buildDir 'dsf/libdsf.a') '-o' (Join-Path $buildDir 'aircraft_profile_generator_tests.exe')
     if ($LASTEXITCODE -ne 0) { throw 'Aircraft profile generator test compilation failed' }
     & $compiler @common 'tests/aircraft_profile_tests.cpp' '-o' (Join-Path $buildDir 'aircraft_profile_tests.exe')
     if ($LASTEXITCODE -ne 0) { throw 'Aircraft profile test compilation failed' }
@@ -53,14 +53,28 @@ try {
         & (Join-Path $buildDir 'runway_ahead_tests.exe')
         if ($LASTEXITCODE -ne 0) { throw 'Runway advisory tests failed' }
     }
-    & $compiler @common 'src/fms.cpp' 'tests/fms_tests.cpp' '-o' (Join-Path $buildDir 'fms_tests.exe')
+    & $compiler @common 'src/fms.cpp' 'src/aircraft/lr/mcdu.cpp' 'tests/lr_fms_tests.cpp' '-o' (Join-Path $buildDir 'lr_fms_tests.exe')
+    if ($LASTEXITCODE -ne 0) { throw 'LR FMS test compilation failed' }
+    if (!$SkipTests) {
+        & (Join-Path $buildDir 'lr_fms_tests.exe')
+        if ($LASTEXITCODE -ne 0) { throw 'LR FMS tests failed' }
+    }
+    & $compiler @common 'src/fms.cpp' 'src/aircraft/lr/mcdu.cpp' 'tools/lr_fms_probe.cpp' '-o' (Join-Path $buildDir 'lr_fms_probe.exe')
+    if ($LASTEXITCODE -ne 0) { throw 'LR FMS probe compilation failed' }
+    & $compiler @common 'src/fms.cpp' 'src/aircraft/toliss/mcdu.cpp' 'tests/fms_tests.cpp' '-o' (Join-Path $buildDir 'fms_tests.exe')
     if ($LASTEXITCODE -ne 0) { throw 'FMS test compilation failed' }
     if (!$SkipTests) {
         & (Join-Path $buildDir 'fms_tests.exe')
         if ($LASTEXITCODE -ne 0) { throw 'FMS tests failed' }
     }
-    & $compiler @common 'src/fms.cpp' 'tools/fms_probe.cpp' '-o' (Join-Path $buildDir 'fms_probe.exe')
+    & $compiler @common 'src/fms.cpp' 'src/aircraft/toliss/mcdu.cpp' 'tools/fms_probe.cpp' '-o' (Join-Path $buildDir 'fms_probe.exe')
     if ($LASTEXITCODE -ne 0) { throw 'FMS live probe compilation failed' }
+    & $compiler @common 'tests/fms_source_tests.cpp' '-o' (Join-Path $buildDir 'fms_source_tests.exe')
+    if ($LASTEXITCODE -ne 0) { throw 'FMS source test compilation failed' }
+    if (!$SkipTests) {
+        & (Join-Path $buildDir 'fms_source_tests.exe')
+        if ($LASTEXITCODE -ne 0) { throw 'FMS source tests failed' }
+    }
     & $compiler @common 'src/core.cpp' 'src/nd_ui.cpp' 'tests/ui_tests.cpp' '-o' (Join-Path $buildDir 'ui_tests.exe')
     if ($LASTEXITCODE -ne 0) { throw 'ND UI test compilation failed' }
     if (!$SkipTests) {
@@ -81,10 +95,14 @@ try {
         $packageDir = Join-Path $projectRoot ('dist/'+$packageName)
         New-Item -ItemType Directory -Force (Join-Path $packageDir '64') | Out-Null
         $flavorArgs = if($flavor -eq 'Debug'){@('-DOANS_DEBUG=1','-Og','-g','-fno-omit-frame-pointer')}else{@('-DOANS_DEBUG=0','-O2','-s')}
-        & $compiler @common @flavorArgs '-shared' '-DIBM=1' '-DAPL=0' '-DLIN=0' '-DXPLM200' '-DXPLM210' '-DXPLM300' '-DXPLM301' '-DXPLM303' '-DNOMINMAX' "-I$SdkRoot\CHeaders\XPLM" 'src/core.cpp' 'src/runway_ahead.cpp' 'src/fms.cpp' 'src/fms_xplm.cpp' 'src/nd_ui.cpp' 'src/plugin.cpp' 'src/aircraft_profile_generator.cpp' @luaArgs @dsfArgs (Join-Path $SdkRoot 'Libraries\Win\XPLM_64.lib') '-lopengl32' '-lglu32' '-lgdi32' '-lwinhttp' '-o' (Join-Path $packageDir '64\win.xpl')
+        & $compiler @common @flavorArgs '-shared' '-DIBM=1' '-DAPL=0' '-DLIN=0' '-DXPLM200' '-DXPLM210' '-DXPLM300' '-DXPLM301' '-DXPLM303' '-DNOMINMAX' "-I$SdkRoot\CHeaders\XPLM" 'src/core.cpp' 'src/runway_ahead.cpp' 'src/fms.cpp' 'src/aircraft/toliss/mcdu.cpp' 'src/aircraft/backend.cpp' 'src/aircraft/toliss/backend.cpp' 'src/aircraft/lr/backend.cpp' 'src/aircraft/lr/mcdu.cpp' 'src/aircraft/lr/mcdu_xplm.cpp' 'src/aircraft/toliss/mcdu_xplm.cpp' 'src/nd_ui.cpp' 'src/plugin.cpp' 'src/aircraft/toliss/profile.cpp' @luaArgs @dsfArgs (Join-Path $SdkRoot 'Libraries\Win\XPLM_64.lib') '-lopengl32' '-lglu32' '-lgdi32' '-lwinhttp' '-o' (Join-Path $packageDir '64\win.xpl')
         if ($LASTEXITCODE -ne 0) { throw 'Native plugin compilation failed' }
         Copy-Item -LiteralPath (Join-Path $projectRoot 'config.ini') -Destination $packageDir -Force
         Copy-Item -LiteralPath (Join-Path $projectRoot 'config') -Destination $packageDir -Recurse -Force
+        # Generated packages now store aircraft profiles only by family.
+        Get-ChildItem -LiteralPath (Join-Path $packageDir 'config') -File -Filter '*.json' | ForEach-Object {
+            Remove-Item -LiteralPath $_.FullName
+        }
         Copy-Item -LiteralPath (Join-Path $projectRoot 'assets') -Destination $packageDir -Recurse -Force
         if(Test-Path -LiteralPath (Join-Path $projectRoot 'cache')) {
             Copy-Item -LiteralPath (Join-Path $projectRoot 'cache') -Destination $packageDir -Recurse -Force

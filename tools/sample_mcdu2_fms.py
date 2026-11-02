@@ -4,6 +4,9 @@ Requires build/fms_probe.exe (scripts/build.ps1). Sends only the sampler's
 allowlisted MCDU2 navigation commands, restores the recognized initial page,
 and records screens and decisions. Does not change flight-plan entries.
 The installed .xpl is not replaced or reloaded by this development tool.
+Refuses to navigate while ToLiss OANS commands are registered: external page
+commands would be observed as crew input and change its MCDU2 restore target.
+Use probe_fms_datarefs.py for read-only diagnosis alongside the native plugin.
 """
 from __future__ import annotations
 import argparse
@@ -37,9 +40,13 @@ def main():
         with opener.open(base + path, timeout=5) as response:
             return json.load(response)
 
-    refs = [d for d in get("/datarefs")["data"] if d["name"].startswith(PREFIX) and d["value_type"] == "data"]
     commands = {c["name"] for c in get("/commands")["data"]}
-    report = {"started_at": now(), "driver": "build/fms_probe.exe using src/fms.cpp", "steps": [], "commands": []}
+    if any(name.startswith("toliss_oans/") for name in commands):
+        parser.error("ToLiss OANS commands are registered; external MCDU2 navigation "
+                     "would be tracked as crew input and alter page restoration. "
+                     "Use tools/probe_fms_datarefs.py for read-only diagnosis.")
+    refs = [d for d in get("/datarefs")["data"] if d["name"].startswith(PREFIX) and d["value_type"] == "data"]
+    report = {"started_at": now(), "driver": "build/fms_probe.exe using src/aircraft/toliss/mcdu.cpp", "steps": [], "commands": []}
 
     def read_one(meta):
         raw = get(f'/datarefs/{meta["id"]}/value')["data"]

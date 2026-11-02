@@ -1,5 +1,5 @@
 #include "aircraft_profile.hpp"
-#include "aircraft_profile_generator.hpp"
+#include "aircraft/toliss/profile.hpp"
 #include <iostream>
 #include <stdexcept>
 void check(bool ok,const std::string& why) {if(!ok)throw std::runtime_error(why);}
@@ -21,10 +21,10 @@ int main(int argc,char** argv) {
         check(profile::load(reference,"A20N",error),error);const auto expected=profile::current;
         const auto good=read(reference/"a20n.json");
         auto load=[&](const auto& config,const auto& acf,const std::string& icao="A20N") {
-            return profile::load_for_aircraft(config,acf,icao,loaded,error);
+            return oans::toliss::load_for_aircraft(config,acf,icao,loaded,error);
         };
         auto identify=[&](const auto& acf) {
-            std::string value;check(profile::identify(acf,value,error),error);return value;
+            std::string value;check(oans::toliss::identify(acf,value,error),error);return value;
         };
         const auto original_id=identify(model);
         check(std::regex_match(original_id,std::regex(".+-[0-9a-f]{4}-[0-9a-f]{4}")),"ID format");

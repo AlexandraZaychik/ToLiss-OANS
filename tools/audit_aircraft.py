@@ -104,7 +104,7 @@ def main() -> None:
         profile[key] = [[result["displays"][mode]["screens"][i]["uv"] for i in indices]
                         for mode in ("normal", "fallback")]
     profile["nd_corners"] = [result["displays"]["normal"]["screens"][i]["cg_corners"] for i in (1, 3)]
-    profile_path = PROJECT / "config/a20n.json"
+    profile_path = PROJECT / "config/toliss/a20n.json"
     profile_path.parent.mkdir(exist_ok=True)
     profile_path.write_text(json.dumps(profile, indent=2) + "\n", encoding="utf-8")
     print(f"Profile extracted: {report}")
