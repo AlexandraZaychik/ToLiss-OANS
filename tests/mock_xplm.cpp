@@ -17,6 +17,10 @@
 #include <memory>
 #include <string>
 #include <vector>
+#ifdef OANS_PREVIEW_GL
+#include <windows.h>
+#include <GL/gl.h>
+#endif
 
 struct Data {std::string name;std::vector<double> values{0};int type=xplmType_Double;std::string bytes;};
 struct Win {XPLMCreateWindow_t params;};
@@ -144,6 +148,9 @@ __declspec(dllexport) void MockSet(const char* name,int i,double v) {
     XPLMFindDataRef(name);
     auto& d=data.at(name);if(i>=static_cast<int>(d.values.size()))d.values.resize(i+1);d.values[i]=v;
 }
+__declspec(dllexport) void MockSetData(const char* name,const char* value) {
+    auto& d=data[name];d.name=name;d.type=xplmType_Data;d.bytes=value;
+}
 __declspec(dllexport) double MockGet(const char* name,int i) {return data.at(name).values.at(i);}
 __declspec(dllexport) int MockSetters() {return setter_count;}
 __declspec(dllexport) void MockAdvance(float dt) {elapsed+=dt;if(loop)loop(dt,dt,1,nullptr);}
@@ -156,6 +163,7 @@ __declspec(dllexport) void MockProject() {if(windows.size()>1)windows[1]->params
 __declspec(dllexport) int MockWheel(int win,int x,int y,int clicks) {auto* w=windows.at(win);return w->params.handleMouseWheelFunc(w,x,y,0,clicks,nullptr);}
 __declspec(dllexport) int MockCursor(int win,int x,int y) {auto* w=windows.at(win);return w->params.handleCursorFunc(w,x,y,nullptr);}
 __declspec(dllexport) void MockKey(int key) {if(focused)focused->params.handleKeyFunc(focused,static_cast<char>(key),xplm_DownFlag,0,nullptr,0);}
+__declspec(dllexport) void MockKeyFlags(int key,int flags,int vk) {if(focused)focused->params.handleKeyFunc(focused,static_cast<char>(key),static_cast<XPLMKeyFlags>(flags|xplm_DownFlag),static_cast<char>(vk),nullptr,0);}
 __declspec(dllexport) int MockFocus() {auto i=std::find(windows.begin(),windows.end(),focused);return i==windows.end()?-1:static_cast<int>(i-windows.begin());}
 __declspec(dllexport) void MockCommand(const char* name) {auto& c=commands.at(name);if(c.handler)c.handler(&c,xplm_CommandBegin,c.data);fms_command(name);}
 __declspec(dllexport) void MockInitFms() {fms_enabled=true;fms_screen("IDENT");}
@@ -255,10 +263,21 @@ void XPLMSetWindowIsVisible(XPLMWindowID id,int v) {static_cast<Win*>(id)->param
 void XPLMSetWindowResizingLimits(XPLMWindowID,int,int,int,int) {}
 void XPLMSetWindowTitle(XPLMWindowID,const char*) {}
 void XPLMTakeKeyboardFocus(XPLMWindowID id) {auto* next=static_cast<Win*>(id);if(focused&&focused!=next)focused->params.handleKeyFunc(focused,0,0,0,nullptr,1);focused=next;}
+#ifdef OANS_PREVIEW_GL
+void XPLMSetGraphicsState(int fog,int texture,int lighting,int alpha,int blend,int depth,int write) {
+    auto set=[](GLenum cap,bool on){if(on)glEnable(cap);else glDisable(cap);};
+    set(GL_FOG,fog);set(GL_TEXTURE_2D,texture>0);set(GL_LIGHTING,lighting);set(GL_ALPHA_TEST,alpha);
+    set(GL_BLEND,blend);set(GL_DEPTH_TEST,depth);glDepthMask(write?GL_TRUE:GL_FALSE);
+}
+void XPLMGenerateTextureNumbers(int* out,int count) {glGenTextures(count,reinterpret_cast<GLuint*>(out));}
+void XPLMBindTexture2d(int texture,int) {glBindTexture(GL_TEXTURE_2D,texture);}
+#else
 void XPLMSetGraphicsState(int,int,int,int,int,int,int) {}
 void XPLMGenerateTextureNumbers(int* out,int count) {for(int i=0;i<count;++i)out[i]=i+1;}
 void XPLMBindTexture2d(int,int) {}
+#endif
 void XPLMDrawString(float*,int,int,const char*,int*,XPLMFontID) {}
+float XPLMMeasureString(XPLMFontID,const char*,int count) {return count*6.0f;}
 XPLMPluginID XPLMGetMyID() {return 42;}
 void XPLMGetVersions(int* xp,int* sdk,XPLMHostApplicationID* host) {*xp=120000;*sdk=400;*host=xplm_Host_XPlane;}
 void XPLMGetPluginInfo(XPLMPluginID,char*,char* path,char*,char*) {if(path)std::strcpy(path,plugin_path.c_str());}

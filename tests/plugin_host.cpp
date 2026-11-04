@@ -10,8 +10,10 @@
 #include <sstream>
 #include <utility>
 #include <cstdlib>
+#include <vector>
 #include "../src/aircraft_profile.hpp"
 #include "../src/aircraft/toliss/profile.hpp"
+#include "../src/menu_layout.hpp"
 
 template<class T>T function(HMODULE m,const char* n) {auto p=GetProcAddress(m,n);if(!p)throw std::runtime_error(std::string("Missing export ")+n);return reinterpret_cast<T>(p);}
 int checks=0;
@@ -43,6 +45,7 @@ int main(int argc,char** argv) {
         auto advance=function<void(*)(float)>(mock,"MockAdvance");
         auto pointer=function<int(*)(int,int,int,int,int)>(mock,"MockPointer");
         auto project=function<void(*)()>(mock,"MockProject");auto key=function<void(*)(int)>(mock,"MockKey");
+        auto key_flags=function<void(*)(int,int,int)>(mock,"MockKeyFlags");
         auto focus=function<int(*)()>(mock,"MockFocus");auto wheel=function<int(*)(int,int,int,int)>(mock,"MockWheel");
         auto cursor=function<int(*)(int,int,int)>(mock,"MockCursor");
         auto cmd=function<void(*)(const char*)>(mock,"MockCommand");auto resources=function<int(*)()>(mock,"MockResources");
@@ -74,7 +77,7 @@ int main(int argc,char** argv) {
         {std::ifstream file(log_path);std::ostringstream text;text<<file.rdbuf();
          check(text.str().find("No supported aircraft backend detected")==std::string::npos&&text.str().find("ND BLOCKED")==std::string::npos,"startup does not report unsupported before the deferred aircraft probe");}
         check(snapshot().find("AIRCRAFT_IDENTIFICATION state=WAITING")!=std::string::npos,"startup snapshot explicitly reports pending identification");
-        check(resources()==24,"4 windows, 18 OANS command handlers, loop and draw callback registered before provider binding");
+        check(resources()==26,"5 windows, 19 OANS command handlers, loop and draw callback registered before provider binding");
         set("AirbusFBW/CaptMAPAvail",0,0);set("AirbusFBW/CoMAPAvail",0,0);
         advance(.1f); // Aircraft adapters bind only after XPluginStart returns.
         check(snapshot().find("AIRCRAFT_BACKEND id=toliss manufacturer=\"ToLiss\"")!=std::string::npos&&snapshot().find("AIRCRAFT_IDENTIFICATION state=IDENTIFIED plugin_enabled=1")!=std::string::npos,
@@ -105,10 +108,30 @@ int main(int argc,char** argv) {
             if(debug)check(text.find("Environment X-Plane=120000")!=std::string::npos&&text.find("DataRef bind")!=std::string::npos,"debug records simulator version and SDK binding breadcrumbs");
         }
         check(resources()>24,"deferred ToLiss adapter registers MCDU key observers");
-        auto menu_count=function<int(*)()>(mock,"MockMenuItems");auto menu_label=function<const char*(*)(int)>(mock,"MockMenuLabel");
-        auto menu_click=function<void(*)(int)>(mock,"MockMenuClick");
-        check(menu_count()==15&&std::string(menu_label(0))=="Open Airport Map Window"&&std::string(menu_label(1))=="Test","map window, Test and Setting menu hierarchy registered");
-        auto menu_checked=function<int(*)(int)>(mock,"MockMenuChecked");
+        auto menu_count=function<int(*)()>(mock,"MockMenuItems");auto raw_menu_label=function<const char*(*)(int)>(mock,"MockMenuLabel");
+        auto raw_menu_click=function<void(*)(int)>(mock,"MockMenuClick");
+        auto raw_menu_checked=function<int(*)(int)>(mock,"MockMenuChecked");
+        check(menu_count()==static_cast<int>(std::size(oans::menu_layout)),"all menu definition entries registered");
+        for(int i=0;i<menu_count();++i)
+            check(std::string(raw_menu_label(i))==oans::menu_layout[i].label,"native menu order matches editable definition");
+        // Existing scenarios address semantic slots, independent of developer menu order.
+        const char* semantic_labels[]={"Open Airport Map Window","Test","Setting","Stand name","Simple","Complex",
+            "stus_bar","Cursor","Pink - Vertical (default)","Pink - Horizontal","Yellow - Vertical","Yellow - Horizontal",
+            "auto info from mcdu2","show traffic","About","Route Plan"};
+        std::vector<int> menu_indices;
+        for(const auto label:semantic_labels) {
+            int found=-1;
+            for(int i=0;i<menu_count();++i)if(std::string(raw_menu_label(i))==label) {
+                check(found==-1,"semantic menu labels are unique");found=i;
+            }
+            check(found>=0,"semantic menu item exists");menu_indices.push_back(found);
+        }
+        auto menu_label=[&](int i){return raw_menu_label(menu_indices.at(i));};
+        auto menu_click=[&](int i){raw_menu_click(menu_indices.at(i));};
+        auto menu_checked=[&](int i){return raw_menu_checked(menu_indices.at(i));};
+        check(menu_count()==16&&std::string(menu_label(0))=="Open Airport Map Window"&&std::string(menu_label(1))=="Test"&&std::string(menu_label(15))=="Route Plan","map window, Test, Setting and Route Plan menu hierarchy registered");
+        menu_click(15);check(focus()==4,"Route Plan takes keyboard focus");
+        key(27);check(focus()==-1,"Escape closes Route Plan and releases keyboard focus");
         check(std::string(menu_label(2))=="Setting"&&std::string(menu_label(3))=="Stand name"&&std::string(menu_label(4))=="Simple"&&std::string(menu_label(5))=="Complex","stand name submenu labels");
         check(menu_checked(4)&&!menu_checked(5),"Simple is selected by default");
         menu_click(5);check(!menu_checked(4)&&menu_checked(5),"Complex selection is exclusive");
@@ -207,6 +230,54 @@ int main(int argc,char** argv) {
             check(FreeLibrary(plugin)!=0,"unload plugin after building test");plugin=nullptr;FreeLibrary(mock);mock=nullptr;
             std::cout<<"PASS "<<expected_buildings<<" (MOCK SDK ONLY)\n";return 0;
         }
+        cmd("toliss_oans/route_plan");
+        for(char c:std::string("A2 A1 RW09"))key(c);
+        key(13);
+        check(session_log().find("Route plan ZTEST: A2 A1 RW09")!=std::string::npos,
+              "actual plugin accepts typed route and applies the current airport taxi graph");
+        int rl,rt,rr,rb;function<void(*)(int,int*,int*,int*,int*)>(mock,"MockWindowRect")(4,&rl,&rt,&rr,&rb);
+        check(rt-rb==200,"route window removes the redundant header area");
+        auto route_applies=[&](const std::string& expected,const char* message) {
+            const auto before=session_log().size();key(13);
+            check(session_log().substr(before).find("Route plan ZTEST: "+expected+" (")!=std::string::npos,message);
+        };
+        // SDK basic font fixture advances six pixels per character.
+        pointer(4,1,rl+34,rb+164,0);pointer(4,3,rl+34,rb+164,0);
+        key('X');key(8);key_flags(0,0,0x2e);key('2');
+        route_applies("A2 A1 RW09","mouse places the caret inside text for insertion, Backspace and Delete");
+        pointer(4,1,rl+28,rb+164,0);pointer(4,2,rl+40,rb+164,0);pointer(4,3,rl+40,rb+164,0);
+        key('B');key('2');
+        route_applies("B2 A1 RW09","forward mouse drag selects and replaces only the chosen route text");
+        pointer(4,1,rl+40,rb+164,0);pointer(4,2,rl+28,rb+164,0);pointer(4,3,rl+28,rb+164,0);
+        key('A');key('2');
+        key_flags(0,0,0x24);key_flags(0,0,0x27);key_flags(0,0,0x2e);key('2');
+        key_flags(0,0,0x23);key_flags(0,1,0x25);key('9');
+        route_applies("A2 A1 RW09","reverse drag, Home/End, arrows and Shift selection preserve surrounding text");
+        key_flags(0,4,0x41);
+        const std::string long_route=std::string(180,' ')+"A2 A1 RW09";
+        for(char c:long_route)key(c);
+        key_flags(0,0,0x24);pointer(4,1,rl+28,rb+164,0);pointer(4,3,rl+28,rb+164,0);key(' ');
+        key_flags(0,0,0x23);key(8);key('9');
+        route_applies(" "+long_route,"long route scrolls between both ends while retaining all characters");
+        key_flags(0,4,0x41);key(8);
+        for(char c:std::string("A2 A1 RW09"))key(c);
+        route_applies("A2 A1 RW09","Ctrl+A and Backspace clear the complete selection");
+        pointer(4,1,rl+230,rb+105,0); // Clear route, then close without retaining an overlay.
+        key(27);
+        cmd("toliss_oans/route_plan");
+        for(char c:std::string("[ZALT] 990 A1 RW18"))key(c);
+        key(13);
+        for(int i=0;i<100;++i){advance(.1f);Sleep(3);}
+        check(report().find("airport=ZALT ")!=std::string::npos&&session_log().find("Route plan ZALT: [ZALT] 990 A1 RW18")!=std::string::npos,
+              "leading ICAO tag loads its airport and applies a route using substring stand matching");
+        pointer(4,1,rl+230,rb+105,0);
+        for(char c:std::string("990 A1 RW18 [ZALT]"))key(c);
+        key(13);
+        for(int i=0;i<100;++i){advance(.1f);Sleep(3);}
+        check(session_log().find("Route plan ZALT: 990 A1 RW18 [ZALT]")!=std::string::npos,
+              "trailing ICAO tag applies the specified airport route");
+        pointer(4,1,rl+230,rb+105,0);key(27);
+        cmd("toliss_oans/nearest");for(int i=0;i<100;++i){advance(.1f);Sleep(3);}
         check(report().find("TCAS traffic_icons=1 ")!=std::string::npos,
               "TCAS array reader skips ownship, invalid slots, fast targets and targets beyond 1 NM");
         const double old_lat=get("sim/flightmodel/position/latitude",0),old_lon=get("sim/flightmodel/position/longitude",0);
@@ -767,12 +838,12 @@ int main(int argc,char** argv) {
         check(unsupported.find("AIRCRAFT_BACKEND id=NONE")!=std::string::npos,"same Airbus ICAO without provider does not select ToLiss");
         check(unsupported.find("FMS source=NONE")!=std::string::npos&&unsupported.find("profile_match=0 aircraft_match=0")!=std::string::npos,"unsupported backend drops flight plan and geometry");
         check(unsupported.find("AirbusFBW/")==std::string::npos,"unsupported backend has no ToLiss data bindings");
-        check(resources()==24,"switching away unregisters every ToLiss key observer");
+        check(resources()==26,"switching away unregisters every ToLiss key observer");
         ui_name("Custom ToLiSs A320 Std Def");
         for(int i=0;i<60;++i)advance(.1f);
         check(report().find("AIRCRAFT_BACKEND id=toliss")!=std::string::npos,"mixed-case UI name identifies ToLiss without dedicated DataRefs");
         check(report().find("profile_match=1 aircraft_match=0")!=std::string::npos,"name-only identification loads family profile while waiting for ND interfaces");
-        check(resources()==24,"name-only identity cannot start MCDU activity before ND interfaces are ready");
+        check(resources()==26,"name-only identity cannot start MCDU activity before ND interfaces are ready");
         ui_name("Other Airbus A320");
         signature_name("custom/Vendor_ToLiSs/new_identity");
         provider(1);
@@ -788,7 +859,7 @@ int main(int argc,char** argv) {
         for(int i=0;i<60;++i)advance(.1f);
         check(report().find("profile_match=1 aircraft_match=1")!=std::string::npos,"UI name alone selects and readies the adapter when ND interfaces exist");
         const auto lr_model=std::filesystem::u8path(argv[3])/"renamed-lr-aircraft.acf";
-        {std::ofstream acf(lr_model);acf<<"I\n1200\nACF\nP acf/_studio Laminar Research\nP acf/_ICAO A333\n";}
+        {std::ofstream acf(lr_model);acf<<"I\n1200\nACF\nP acf/_studio Laminar Research\nP acf/_ICAO A333\nP acf/_cgZ 97\nP _gear/0/_gear_z 21.860000610\n";}
         auto configure=function<void(*)(const char*,const char*,const char*)>(mock,"MockConfigure");
         auto icao=function<void(*)(const char*)>(mock,"MockAircraftIcao");
         icao("A333");signatures(1); // Keep conflicting ToLiss names/UI to exercise studio precedence.
@@ -823,12 +894,151 @@ int main(int argc,char** argv) {
         set("laminar/A333/buttons/pfd_nd_swap_capt_status",0,1);advance(.1f);
         check(report().find("OANS_switch side=0 visible=0")!=std::string::npos,"LR PFD/ND swap removes the overlay");
         set("laminar/A333/buttons/pfd_nd_swap_capt_status",0,0);
+        set("laminar/A333/pfd1/display_state",0,3);
+        set("sim/cockpit2/switches/instrument_brightness_ratio",0,1);
+        set("sim/cockpit2/switches/instrument_brightness_ratio",1,1);
+        set("sim/flightmodel2/gear/on_ground",1,1);set("sim/flightmodel/position/groundspeed",0,10);
+        set("sim/flightmodel/position/psi",0,0);
+        set("sim/flightmodel/position/latitude",0,30-150.0/6371000*180/3.141592653589793);
+        set("sim/flightmodel/position/longitude",0,120.012);
+        for(int i=0;i<300&&report().find("RWY_AHEAD_display side=0 nd=1 pfd=1")==std::string::npos;++i) {advance(.1f);Sleep(5);}
+        check(report().find("RWY_AHEAD_display side=0 nd=1 pfd=1")!=std::string::npos,"LR native detector feeds both ND and PFD advisory overlays");
+        check(session_log().find("half_span_m=30.150000 fallback_a320=0")!=std::string::npos,"LR native detector uses A333 envelope without fallback");
+        set("sim/cockpit2/EFIS/map_range_nm",0,40);set("laminar/A333/knobs/EFIS_mode_pos_capt",0,0);advance(.1f);
+        check(report().find("RWY_AHEAD_display side=0 nd=0 pfd=1")!=std::string::npos,"LR PFD advisory survives range and ND mode changes");
+        set("laminar/A333/pfd1/display_state",0,0);advance(.1f);
+        check(report().find("RWY_AHEAD_display side=0 nd=0 pfd=0")!=std::string::npos,"LR PFD display power blocks advisory");
+        set("sim/flightmodel/position/groundspeed",0,0);advance(.1f);
         check(resources()==lr_resources&&observers("AirbusFBW/")==0,"LR display operation does not duplicate listeners or bind ToLiss keys");
+        const auto zibo_model=std::filesystem::u8path(argv[3])/"renamed-zibo.acf";
+        {std::ofstream acf(zibo_model);acf<<"I\n1200\nACF\nP acf/_studio Laminar Research modified by Zibo and Twkster\nP acf/_ICAO B738\nP acf/_cgZ 59.5\nP _gear/0/_gear_z 13.590000153\n";}
+        configure(argv[2],argv[3],zibo_model.u8string().c_str());icao("B738");
+        auto set_text=function<void(*)(const char*,const char*)>(mock,"MockSetData");
+        set_text("laminar/B738/fms/ref_icao","ZUUU");set_text("laminar/B738/fms/ref_runway","02L");
+        set_text("laminar/B738/fms/dest_icao","ZGGG");set_text("laminar/B738/fms/dest_runway","01L");
+        for(const char* side:{"capt","fo"}) {
+            set((std::string("laminar/B738/EFIS/")+side+"/map_range").c_str(),0,0);
+            set((std::string("laminar/B738/EFIS_control/")+side+"/map_mode_pos").c_str(),0,2);
+            set((std::string("laminar/B738/EFIS_control/")+side+"/exp_map").c_str(),0,1);
+        }
+        message(0,106,nullptr);message(0,102,nullptr);
+        for(int i=0;i<60;++i)advance(.1f);
+        const auto zibo_report=report();
+        check(zibo_report.find("AIRCRAFT_BACKEND id=zibo manufacturer=\"Zibo\"")!=std::string::npos,"Zibo studio selects independent backend despite conflicting ToLiss registry");
+        check(zibo_report.find("profile_match=1 aircraft_match=1")!=std::string::npos,"Zibo profile and interfaces load");
+        check(zibo_report.find("OANS_switch side=0 visible=1")!=std::string::npos&&zibo_report.find("OANS_switch side=1 visible=1")!=std::string::npos,"both Zibo ND controls visible at physical 5 NM");
+        check(zibo_report.find("FMS source=ZIBO_DATAREF")!=std::string::npos&&observers("sim/FMS")==0&&observers("AirbusFBW/")==0,"Zibo replaces LR FMS source and observers");
+        check(observers("laminar/B738/button/fmc")==138,"Zibo observes every key on both FMC keyboards");
+        check(zibo_report.find("observed=0 age=-1 generation=0")!=std::string::npos,"Zibo phase zero does not auto-read on bind or idle");
+        const int before_zibo_writes=writes();
+        auto zibo_generation=[&](){
+            const auto r=report();const auto start=r.find("FMS source=ZIBO_DATAREF");
+            const auto at=r.find(" generation=",start);check(at!=std::string::npos,"Zibo generation diagnostic exists");
+            return std::stoi(r.substr(at+12));
+        };
+        for(int phase=0;phase<=8;++phase) {
+            set("laminar/B738/FMS/flight_phase",0,phase);
+            const int before=zibo_generation();advance(6);
+            check(zibo_generation()==before,"No automatic Zibo read in any phase, including zero");
+            const auto destination=phase%2?"ZBAA":"ZGGG";
+            set_text("laminar/B738/fms/dest_icao",destination);
+            cmd(phase%2?"laminar/B738/button/fmc2_exec":"laminar/B738/button/fmc1_A");
+            check(zibo_generation()==before,"FMC callback queues read until aircraft has processed input");
+            advance(2.9f);check(zibo_generation()==before,"Zibo waits three seconds after a key in every phase");
+            advance(.2f);
+            check(zibo_generation()==before+1,"Any FMC key reads DataRefs after three seconds in every phase");
+            check(report().find(std::string("destination=")+destination+" arrival_runway=01L alternate=UNAVAILABLE")!=std::string::npos,"Zibo publishes actual DataRef endpoints and no invented alternate");
+            advance(6);check(zibo_generation()==before+1,"Key-triggered Zibo read does not start a polling timer");
+        }
+        check(report().find("origin=ZUUU departure_runway=02L")!=std::string::npos,"Zibo reads origin and runway directly");
+        {
+            const int before=zibo_generation();
+            cmd("laminar/B738/button/fmc1_legs");advance(2);
+            cmd("laminar/B738/button/fmc2_3R");advance(2);
+            check(zibo_generation()==before,"A second key restarts the three-second countdown across both keyboards");
+            set_text("laminar/B738/fms/dest_icao","ZSPD");advance(1.1f);
+            check(zibo_generation()==before+1&&report().find("destination=ZSPD arrival_runway=01L")!=std::string::npos,"One deferred read captures latest DataRefs after last key");
+        }
+        {
+            const int before=zibo_generation();
+            cmd("laminar/B738/button/fmc1_menu");
+            set("laminar/B738/display_units/idu_cpt",0,-1);set("laminar/B738/display_units/idu_fo",0,-1);
+            advance(1);
+            set("laminar/B738/display_units/idu_cpt",0,0);set("laminar/B738/display_units/idu_fo",0,0);
+            advance(5);check(zibo_generation()==before,"Power loss cancels pending acquisition; power restoration does not auto-read");
+            cmd("laminar/B738/button/fmc2_menu");advance(3.1f);
+            check(zibo_generation()==before+1,"New key after power restoration captures normally");
+        }
+        set_text("laminar/B738/fms/ref_icao","----");set_text("laminar/B738/fms/dest_icao","");
+        cmd("laminar/B738/button/fmc2_1L");advance(3.1f);
+        check(report().find("observed=0 age=")!=std::string::npos&&report().find("FMS_PLAN origin= departure_runway= destination= arrival_runway=")!=std::string::npos,"Clearing a Zibo route clears prior endpoints without retaining stale fields");
+        check(writes()==before_zibo_writes,"Zibo acquisition does not write DataRefs");
+        {
+            const int before=zibo_generation();
+            set_text("laminar/B738/fms/dest_icao","ZSPD");
+            cmd("laminar/B738/button/fmc1_exec");menu_click(12);advance(2.9f);
+            check(!menu_checked(12)&&read(package/"config.ini").find("fms_mcdu2_sampling=0")!=std::string::npos&&
+                  zibo_generation()==before,"MCDU switch persists OFF without cancelling Zibo countdown");
+            advance(.2f);
+            check(zibo_generation()==before+1&&report().find("FMS source=ZIBO_DATAREF enabled=1")!=std::string::npos&&
+                  report().find("destination=ZSPD")!=std::string::npos,"Pending direct read completes with MCDU switch OFF");
+            cmd("laminar/B738/button/fmc2_menu");menu_click(12);advance(3.1f);
+            check(zibo_generation()==before+2&&report().find("destination=ZSPD")!=std::string::npos,"Turning MCDU switch ON preserves Zibo plan and pending read");
+            menu_click(12);cmd("toliss_oans/reload");advance(6);
+            check(!menu_checked(12)&&report().find("FMS source=ZIBO_DATAREF enabled=1 bound=1")!=std::string::npos,
+                  "Zibo binds with INI MCDU sampling disabled after reload");
+            const int reloaded=zibo_generation();
+            set_text("laminar/B738/fms/dest_icao","ZBAA");cmd("laminar/B738/button/fmc2_exec");advance(3.1f);
+            check(zibo_generation()==reloaded+1&&report().find("destination=ZBAA")!=std::string::npos,
+                  "Zibo reads DataRefs with INI MCDU sampling disabled");
+            menu_click(12); // Restore the CDU preference before switching back to ToLiss.
+        }
+        check(session_log().find((package/"config"/"zibo"/"b738.json").u8string())!=std::string::npos,"Zibo uses config/zibo/b738.json");
+        set("laminar/B738/EFIS/capt/map_range",0,1);advance(.1f);
+        check(report().find("OANS_switch side=0 visible=0")!=std::string::npos&&report().find("OANS_switch side=1 visible=1")!=std::string::npos,"Zibo physical 10 NM blocks captain independently");
+        set("laminar/B738/EFIS/capt/map_range",0,0);advance(.1f);
+        check(report().find("OANS_switch side=0 visible=1")!=std::string::npos,"return to physical 5 NM restores Zibo OANS");
+        set("laminar/B738/irs/nd_allign",0,2);advance(.1f);
+        check(report().find("OANS_switch side=0 visible=0")!=std::string::npos,"Zibo alignment in progress blocks overlay");
+        set("laminar/B738/irs/nd_allign",0,0);
+        set("laminar/B738/display_units/odu_cpt",0,0);set("laminar/B738/display_units/odu_fo",0,0);
+        for(int i=0;i<4;++i)set("sim/cockpit2/switches/instrument_brightness_ratio",i,1);
+        set("sim/flightmodel2/gear/on_ground",1,1);set("sim/flightmodel/position/groundspeed",0,10);
+        set("sim/flightmodel/position/psi",0,0);
+        set("sim/flightmodel/position/latitude",0,30-150.0/6371000*180/3.141592653589793);
+        set("sim/flightmodel/position/longitude",0,120.012);
+        for(int i=0;i<300&&report().find("RWY_AHEAD_display side=0 nd=1 pfd=1")==std::string::npos;++i) {advance(.1f);Sleep(5);}
+        check(report().find("RWY_AHEAD_display side=0 nd=1 pfd=1")!=std::string::npos&&
+              report().find("RWY_AHEAD_display side=1 nd=1 pfd=1")!=std::string::npos,"Zibo native runway prediction feeds all four warning displays");
+        check(session_log().find("half_span_m=17.200000 fallback_a320=0")!=std::string::npos,"Zibo native warning uses B738 geometry and ACF reference");
+        set("laminar/B738/EFIS/capt/map_range",0,3);advance(.1f);
+        check(report().find("OANS_switch side=0 visible=0")!=std::string::npos&&
+              report().find("RWY_AHEAD_display side=0 nd=1 pfd=1")!=std::string::npos,"Zibo warning survives range change with OANS map blocked");
+        set("laminar/B738/EFIS_control/capt/map_mode_pos",0,0);advance(.1f);
+        check(report().find("RWY_AHEAD_display side=0 nd=0 pfd=1")!=std::string::npos,"Zibo PFD warning survives APP mode");
+        set("laminar/B738/EFIS_control/capt/map_mode_pos",0,2);
+        set("laminar/B738/EFIS_control/capt/vsd_map",0,1);advance(.1f);
+        check(report().find("RWY_AHEAD_display side=0 nd=0 pfd=1")!=std::string::npos,"Zibo VSD blocks ND warning only");
+        set("laminar/B738/EFIS_control/capt/vsd_map",0,0);
+        set("laminar/B738/display_units/odu_cpt",0,-1);advance(.1f);
+        check(report().find("RWY_AHEAD_display side=0 nd=1 pfd=0")!=std::string::npos&&
+              report().find("RWY_AHEAD_display side=1 nd=1 pfd=1")!=std::string::npos,"Zibo PFD power is independent of its ND and opposite side");
+        set("laminar/B738/display_units/odu_cpt",0,0);
+        set("sim/cockpit2/switches/instrument_brightness_ratio",0,0);advance(.1f);
+        check(report().find("RWY_AHEAD_display side=0 nd=1 pfd=0")!=std::string::npos,"Zibo PFD warning respects its own brightness");
+        set("sim/cockpit2/switches/instrument_brightness_ratio",0,1);
+        set("sim/flightmodel/position/groundspeed",0,0);advance(.1f);
+        check(report().find("RWY_AHEAD_display side=0 nd=0 pfd=0")!=std::string::npos,"Zibo stop clears both warning displays");
+        check(writes()==before_zibo_writes,"Zibo warning path writes no aircraft DataRefs");
         configure(argv[2],argv[3],argv[4]);icao("A20N");
         message(0,106,nullptr);message(0,102,nullptr);
         for(int i=0;i<60;++i)advance(.1f);
         check(report().find("AIRCRAFT_BACKEND id=toliss")!=std::string::npos,"switching back from LR reselects ToLiss");
+        check(observers("laminar/B738/button/fmc")==0,"Switching away removes every Zibo key observer");
+        cmd("toliss_oans/route_plan");
+        check(focus()==4,"Route Plan command opens the input window");
         disable();
+        check(focus()==-1,"disabling the plugin releases Route Plan keyboard focus");
         check(report().find("RWY_AHEAD_TEST active=0 pending=0")!=std::string::npos,"disable clears forced test warning");
         cmd("toliss_oans/capt_airport");
         check(focus()==-1,"disable returns keyboard focus and prevents disabled commands reacquiring it");

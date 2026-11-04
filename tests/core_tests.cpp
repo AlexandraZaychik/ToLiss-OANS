@@ -213,12 +213,16 @@ void test_aircraft_airport_filter() {
     for(const auto& code:{"A319","a19n","A320","a20n","A321","a21n"})
         check(minimum_runway_length(code)==1200,"A320 family minimum is 1200 m, case insensitive");
     check(minimum_runway_length("a339")==1600&&minimum_runway_length("a346")==1700,"widebody runway limits");
-    check(minimum_runway_length("")==0&&minimum_runway_length("B738")==0,"unspecified aircraft retain previous airport coverage");
+    check(minimum_runway_length("a333")==minimum_runway_length("a339")&&
+          minimum_runway_width("a333")==minimum_runway_width("a339"),"LR A330 uses ToLiss A339 runway limits");
+    check(minimum_runway_length("b738")==minimum_runway_length("A320")&&
+          minimum_runway_width("b738")==minimum_runway_width("A320"),"Zibo B738 uses ToLiss A320 runway limits");
+    check(minimum_runway_length("")==0&&minimum_runway_length("B739")==0,"unspecified aircraft retain previous airport coverage");
     std::vector<IndexEntry> all;
     for(double length:{1199.0,1200.0,1599.0,1600.0,1699.0,1700.0,3000.0}) {
         IndexEntry e;e.icao="T"+std::to_string(all.size());e.longest=length;e.runway_sizes={{length,45}};e.lat=30;e.lon=120;all.push_back(e);
     }
-    for(const auto& code:{"A320","A339","A346"}) {
+    for(const auto& code:{"A320","B738","A339","A346"}) {
         const auto minimum=minimum_runway_length(code);
         const auto filtered=filter_airport_index(all,minimum);
         check(filtered.front().longest==minimum,"exact runway limit remains eligible");
@@ -229,7 +233,7 @@ void test_aircraft_airport_filter() {
     auto preferred=all[0],fallback=preferred;preferred.file="custom";fallback.file="global";fallback.longest=3000;fallback.runway_sizes={{3000,45}};
     check(filter_airport_index(canonical_index({preferred,fallback}),1200).empty(),"short preferred scenery cannot reappear through a longer fallback");
     check(filter_airport_index(all,0).size()==all.size()&&filter_airport_index({},1700).empty(),"unknown aircraft and empty database handling");
-    for(const auto& code:{"A319","a19n","A320","a20n","A321","a21n","a339","A346"}) {
+    for(const auto& code:{"A319","a19n","A320","a20n","A321","a21n","b738","a333","a339","A346"}) {
         const auto length=minimum_runway_length(code),width=minimum_runway_width(code);
         check(width==(length==1200?30:45),"aircraft runway width thresholds are case insensitive");
         IndexEntry e;e.icao="PAIR";e.longest=3000;
@@ -240,7 +244,7 @@ void test_aircraft_airport_filter() {
         e.runway_sizes={{length-1,width},{length,width-1}};
         check(filter_airport_index({e},length,width).empty(),"either dimension below its threshold rejects the runway");
     }
-    check(minimum_runway_width("B738")==0&&minimum_runway_width("")==0,"unlisted aircraft have no added width restriction");
+    check(minimum_runway_width("B739")==0&&minimum_runway_width("")==0,"unlisted aircraft have no added width restriction");
     const auto file=std::filesystem::temp_directory_path()/"toliss_oans_runway_width_test.dat";
     std::string data(fixture);data.replace(data.find("100 45"),6,"100 20");
     data.insert(data.rfind("99"),"100 45 1 0 0.25 1 1 0 18 30.0 120.0 0 0 0 0 0 0 36 30.015 120.0 0 0 0 0 0 0\n");

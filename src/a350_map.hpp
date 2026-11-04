@@ -58,6 +58,10 @@ public:
     // Borrowed output remains valid until the next call to the same method
     // (or render/render_base side 3 for dynamic). Other output buffers are independent.
     const std::vector<A350Vertex>& render_dynamic(const A350View& view);
+    // Split dynamic output so route overlays can sit above the compass and
+    // every map label while remaining beneath ownship and traffic symbols.
+    const std::vector<A350Vertex>& render_compass(const A350View& view);
+    const std::vector<A350Vertex>& render_aircraft(const A350View& view);
     const std::vector<A350RunwayLabel>& runway_labels(int side) const;
     const A350Switch& oans_switch(bool on) const;
     const std::vector<A350Vertex>& cursor(Vec2 at,bool horizontal=false,bool yellow=false);

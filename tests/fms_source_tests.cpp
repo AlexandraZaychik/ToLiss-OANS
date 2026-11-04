@@ -13,8 +13,10 @@ class ApiSource final : public oans::FmsSource {
     std::string status_="API IDLE";
     bool bound_=false;
     unsigned generation_=0;
+    bool uses_setting_;
 public:
-    explicit ApiSource(Events& events):events_(events) {}
+    explicit ApiSource(Events& events,bool uses_setting=false):events_(events),uses_setting_(uses_setting) {}
+    bool uses_mcdu_sampling_setting() const override {return uses_setting_;}
     ~ApiSource() override {++events_.destroyed;}
     bool bind() override {++events_.binds;return bound_=true;}
     void bind_activity() override {++events_.observers;}
@@ -42,11 +44,13 @@ int main() {
         Events first,second;
         oans::FmsPort port;
         check(!port.bind()&&!port.ready()&&!port.plan().observed,"disconnected state");
+        check(!port.sampling_enabled(false)&&!port.sampling_enabled(true),"disconnected source cannot be enabled");
         port.tick(1,true);port.bind_activity();port.reset_tracking();port.clear(true);
         std::ostringstream empty;port.diagnostics(empty,1,true);
         check(empty.str().find("source=NONE")!=std::string::npos,"disconnected diagnostic");
         port.log_event=[](const std::string& text){if(text=="API READ")++logs;};
         port.select(std::make_unique<ApiSource>(first));
+        check(port.sampling_enabled(false)&&port.sampling_enabled(true),"direct source is independent of MCDU setting");
         check(port.bind()&&port.ready(),"API source binds without MCDU");
         port.bind_activity();port.tick(2,false);check(first.reads==0,"unusable source does not publish");
         port.tick(3,true);
@@ -54,7 +58,8 @@ int main() {
         port.clear(true);port.reset_tracking();
         check(first.restores==1&&first.resets==1&&!port.plan().observed,"clear forwards restoration policy and removes plan");
         port.bind();port.tick(4,true);
-        port.select(std::make_unique<ApiSource>(second));
+        port.select(std::make_unique<ApiSource>(second,true));
+        check(!port.sampling_enabled(false)&&port.sampling_enabled(true),"CDU source still obeys MCDU setting after source switch");
         check(first.clears==2&&first.destroyed==1,"switch disconnects and destroys previous source");
         check(!port.ready()&&!port.plan().observed&&port.generation()==0,"switch cannot retain previous flight plan");
         port.bind();port.tick(5,true);

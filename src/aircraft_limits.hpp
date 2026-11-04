@@ -14,9 +14,11 @@ inline constexpr RunwayLimits runway_limits[] = {
     {"A319", 1200, 30},
     {"A19N", 1200, 30},
     {"A320", 1200, 30},
+    {"B738", 1200, 30}, // Zibo B738 uses the ToLiss A320 runway limits.
     {"A20N", 1200, 30},
     {"A321", 1200, 30},
     {"A21N", 1200, 30},
+    {"A333", 1600, 45}, // LR A330 uses the ToLiss A339 runway limits.
     {"A339", 1600, 45},
     {"A346", 1700, 45},
 };

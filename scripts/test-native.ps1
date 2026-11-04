@@ -60,6 +60,11 @@ I
 1 0 0 0 ALT_ID Alternate Test Airport
 1302 icao_code ZALT
 100 45 1 0 0.25 1 1 0 18 31.0 120.0 0 0 0 0 0 0 36 31.03 120.0 0 0 0 0 0 0
+1201 31.01 120.0 both 1
+1201 31.01 120.001 both 2
+1202 1 2 twoway taxiway A1
+1300 31.01 120.002 270 gate jets Gate990Heavy
+1301 C airline
 1 0 0 0 NEAR_ID Nearby Test Airport
 1302 icao_code ZNEAR
 100 45 1 0 0.25 1 1 0 18 30.2 120.0 0 0 0 0 0 0 36 30.23 120.0 0 0 0 0 0 0

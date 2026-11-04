@@ -3,7 +3,7 @@
 The primary reference is `A350_BTV_v2.14.3/Resources/plugins/FlyWithLua/Scripts/A350_BTV.lua`,
 copyright (c) 2026 Jason R., MIT. The braking demand equation, PI/feed-forward structure,
 pedal slew rates, 50 m exit lead, planar map projection and projective click mapping informed
-this native C++ implementation. The reference license is retained in LICENSE.
+this native C++ implementation. The reference license is retained in `assets/a350/LICENSE.txt`.
 
 Since 0.4.0, the actual A350 map parser, geometry builder, draw primitives,
 anti-aliasing, clipping, runway/stand/marking layers, labels, compass and font
@@ -54,3 +54,8 @@ and local reader patches are recorded in vendor/xptools/UPSTREAM.md; the full
 notice is shipped as assets/a350/DSFLIB_LICENSE.txt.
 The reader includes the RSA Data Security, Inc. MD5 Message-Digest Algorithm;
 its original notice is included in the same DSFLIB_LICENSE.txt.
+
+The optional Windows debug log collector ships unmodified 7-Zip 24.09
+7z.exe and 7z.dll by Igor Pavlov (1999-2024). Full LGPL/BSD/unRAR license
+information is in tools/7zip/License.txt; source availability and provenance
+are in tools/7zip/SOURCE.txt. These binaries are independent of the plugin.

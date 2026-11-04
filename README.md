@@ -1,6 +1,9 @@
 # ToLiss-OANS
 
-oans for toliss all series, lr330\
+oans for:\
+~ ToLiss all series\
+~ Laminar Research B330\
+~ Zibo A737\
 some code from A350，with some small fix and small improve\
 license under GPLv3, due to A350 get some idea from FBW A380 which is GPLv3
 
@@ -59,3 +62,11 @@ CHOXON 2 CHOXOFF、heart4sck、KILO_333167、ricardo404
 20261029-0609Z update\
 ~ mac support, thanks to heart4sck (test)\
 ~ small improve, thanks to ricardo404 (idea, test)
+
+20261102-1050Z update\
+~ lr330 support
+
+20261104-1123Z update\
+~ zibo737 support
+~ small improve
+~ route highlight

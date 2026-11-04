@@ -41,6 +41,13 @@ def verify(package, flavor):
     assert set(profile) == {"nd_brightness", "pfd_brightness", "nd_uv", "pfd_uv", "nd_corners"}
     lr_profile = json.loads((package / 'config/lr/a333.json').read_text(encoding='utf-8'))
     assert lr_profile == json.loads((root / 'config/lr/a333.json').read_text(encoding='utf-8')), 'LR profile differs from current source'
+    zibo_profile = json.loads((package / 'config/zibo/b738.json').read_text(encoding='utf-8'))
+    assert zibo_profile == json.loads((root / 'config/zibo/b738.json').read_text(encoding='utf-8')), 'Zibo profile differs from current source'
+    assert b'SET PHYSICAL ND RANGE TO 5 NM' in data, 'Zibo physical 5 NM gate missing'
+    assert b'ZIBO_DATAREF' in data and b'auto_sampling=0 key_delay_s=3' in data, 'Zibo key-only delayed FMS source missing'
+    assert all(marker in data for marker in (
+        b'laminar/B738/display_units/odu_cpt', b'laminar/B738/display_units/odu_fo',
+        b' advisory_nd=', b' advisory_pfd=')), 'Zibo PFD/ND runway advisory bindings missing'
     assert not list(package.rglob("XPLM_64.dll")), "Test mock SDK must never ship"
     expected_exes = {'CollectLogs.exe', 'tools/7zip/7z.exe'} if is_debug else set()
     assert {p.relative_to(package).as_posix() for p in package.rglob('*.exe')} == expected_exes, 'Unexpected helper or offline test host'

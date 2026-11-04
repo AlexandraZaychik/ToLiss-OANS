@@ -20,7 +20,7 @@ std::vector<RunwayAheadHit> test_runways(const Airport& airport,const std::strin
 // sides using true heading and runway geometry. Preserve threat row ordering.
 std::vector<RunwayAheadHit> orient_runway_advisories(const Airport* airport,
     const std::vector<RunwayAheadHit>& hits,double true_heading);
-// A350 RWYA's separating-axis protection concept, with shared A320/A20N envelope and
+// A350 RWYA's separating-axis protection concept, with an aircraft-specific envelope and
 // the supplied ANF timing rules. No simulator or rendering dependencies.
 class RunwayAhead {
     struct State {bool active=false, inhibited=false, inside=false;double age=0, inside_age=0;};
@@ -28,6 +28,7 @@ class RunwayAhead {
     std::string airport_;
     double low_speed_=0, clock_=0;
     std::vector<RunwayAheadHit> hits_;
+    aircraft_geometry::Envelope envelope_=aircraft_geometry::default_envelope;
 public:
     // Aircraft dimensions are maintained separately from advisory rules.
     static constexpr double fuselage_length=aircraft_geometry::fuselage_length,span=aircraft_geometry::span;
@@ -35,6 +36,8 @@ public:
     static constexpr double half_span=aircraft_geometry::half_span;
     static constexpr double margin=60,horizon=7;
     void reset();
+    void set_envelope(const aircraft_geometry::Envelope& envelope);
+    const aircraft_geometry::Envelope& envelope() const {return envelope_;}
     const std::vector<RunwayAheadHit>& update(const Airport* airport,const RunwayAheadInput& input,double dt);
     const std::vector<RunwayAheadHit>& hits() const {return hits_;}
     double low_speed_seconds() const {return low_speed_;}

@@ -17,6 +17,8 @@
 #endif
 #include "gl_platform.hpp"
 #include "core.hpp"
+#include "route_plan.hpp"
+#include "menu_layout.hpp"
 #include "about_panel.hpp"
 #include "detail_log.hpp"
 #include "nd_ui.hpp"
@@ -50,7 +52,7 @@
 
 using namespace oans;
 namespace {
-constexpr const char* version="0.4.39";
+constexpr const char* version="0.4.43";
 constexpr float white[3]={1,1,1},cyan[3]={.20f,.90f,1},green[3]={0,1,0},amber[3]={1,.65f,0};
 constexpr float taxi_yellow[3]={.95f,.83f,0},magenta[3]={1,.35f,1};
 AtlasFont map_font;
@@ -165,7 +167,6 @@ struct Config {bool nd=true,test=false,fms=true,simple_stand_names=true,status_b
 std::string current_surface;
 double surface_sample_at=0;
 SurfaceTracker surface_tracker;
-int status_bar_item=-1,mcdu2_auto_item=-1,adsb_in_item=-1;
 Config config;
 double status_bar_height() {return config.status_bar&&!config.test?stus_bar_height:0;}
 FmsPort fms_port;
@@ -200,11 +201,26 @@ std::optional<Vec2> pointer_on_map(int id);
 bool search_built[3]={false,false,false};
 int runway_index=-1;
 XPLMWindowID window=nullptr,mouse_window=nullptr,test_window=nullptr,about_window=nullptr;
-XPLMMenuID menu=nullptr,settings_menu=nullptr,stand_name_menu=nullptr,cursor_menu=nullptr;int menu_item=-1;
+XPLMWindowID route_window=nullptr;
+RoutePlan route_plan;
+std::vector<std::array<Vec2,4>> route_quads;
+std::string route_query,route_message="Enter a route, then press Apply or Enter.";
+bool route_focused=false,route_dragging=false;
+size_t route_caret=0,route_anchor=0,route_first=0;
+std::string route_window_title;
+std::string route_pending_icao,route_pending_query;
+XPLMMenuID menu=nullptr;int menu_item=-1;
+struct MenuBinding {XPLMMenuID menu=nullptr;int index=-1;};
+std::array<MenuBinding,31> menu_bindings{};
+std::vector<XPLMMenuID> submenus;
+void check_menu_action(int action,bool checked) {
+    const auto& binding=menu_bindings.at(action);
+    if(binding.menu&&binding.index>=0)
+        XPLMCheckMenuItem(binding.menu,binding.index,checked?xplm_Menu_Checked:xplm_Menu_Unchecked);
+}
 
 void update_cursor_menu() {
-    if(cursor_menu)for(int i=0;i<4;++i)
-        XPLMCheckMenuItem(cursor_menu,i,config.cursor_style==i?xplm_Menu_Checked:xplm_Menu_Unchecked);
+    for(int i=0;i<4;++i)check_menu_action(24+i,config.cursor_style==i);
 }
 
 bool draw_registered=false,loop_registered=false;
@@ -229,10 +245,8 @@ void refresh_tcas_targets() {
 }
 std::vector<MapFeature> map_features[4];
 void update_stand_names() {
-    if(stand_name_menu) {
-        XPLMCheckMenuItem(stand_name_menu,0,config.simple_stand_names?xplm_Menu_Checked:xplm_Menu_Unchecked);
-        XPLMCheckMenuItem(stand_name_menu,1,config.simple_stand_names?xplm_Menu_Unchecked:xplm_Menu_Checked);
-    }
+    check_menu_action(20,config.simple_stand_names);
+    check_menu_action(21,!config.simple_stand_names);
     map_features[2].clear();
     if(airport)for(const auto& s:airport->stands)map_features[2].push_back({stand_name(s.name,config.simple_stand_names),s.pos});
     std::sort(map_features[2].begin(),map_features[2].end(),[](const auto& a,const auto& b){return a.name<b.name;});
@@ -371,7 +385,7 @@ std::string form_encode(const std::string& input) {
 #ifdef _WIN32
 std::string post_overpass(const char* host,const std::string& body) {
     const std::wstring wide_host(host,host+std::strlen(host));
-    WinHttpHandle session{WinHttpOpen(L"ToLissOANS/0.4.39 airport-map",WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+    WinHttpHandle session{WinHttpOpen(L"ToLissOANS/0.4.43 airport-map",WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
                                       WINHTTP_NO_PROXY_NAME,WINHTTP_NO_PROXY_BYPASS,0)};
     if(!session.value)throw std::runtime_error(winhttp_error("WinHttpOpen"));
     if(!WinHttpSetTimeouts(session.value,10000,10000,20000,45000))
@@ -644,9 +658,9 @@ void read_config() {
     if(in.bad())OANS_CONFIG("config.ini read error; settings may be partial");
     update_stand_names();
     update_cursor_menu();
-    if(settings_menu&&status_bar_item>=0)XPLMCheckMenuItem(settings_menu,status_bar_item,config.status_bar?xplm_Menu_Checked:xplm_Menu_Unchecked);
-    if(settings_menu&&mcdu2_auto_item>=0)XPLMCheckMenuItem(settings_menu,mcdu2_auto_item,config.fms?xplm_Menu_Checked:xplm_Menu_Unchecked);
-    if(settings_menu&&adsb_in_item>=0)XPLMCheckMenuItem(settings_menu,adsb_in_item,config.adsb_in?xplm_Menu_Checked:xplm_Menu_Unchecked);
+    check_menu_action(22,config.status_bar);
+    check_menu_action(28,config.fms);
+    check_menu_action(29,config.adsb_in);
     traffic_sample_at=0;if(!config.adsb_in)traffic_targets.clear();
     current_surface.clear();
     surface_sample_at=0;
@@ -694,7 +708,7 @@ void diagnostics() {
         <<" gs_kt="<<target.ground_speed_kt<<" type="<<target.icao_type<<'\n';
     f<<"OANS_DATABASE cycle="<<airport_database_status.cycle<<" validity="<<airport_database_status.validity
      <<" source=Custom Data/cycle_info.txt\n";
-    fms_port.diagnostics(f,XPLMGetElapsedTime(),config.fms);
+    fms_port.diagnostics(f,XPLMGetElapsedTime(),fms_port.sampling_enabled(config.fms));
     f<<"RWY_AHEAD_TEST active="<<advisory_test.active<<" pending="<<advisory_test.pending<<" steady="<<advisory_test.steady
      <<" airport="<<advisory_test.airport_query<<" runway="<<advisory_test.runway_query<<" message="<<advisory_test.message<<'\n';
     for(int side=0;side<2;++side)f<<"RWY_AHEAD_display side="<<side<<" nd="<<advisory_display_available(side,false)
@@ -769,6 +783,11 @@ void inspect_model() {
     char icao[32]={};if(dr("icao").id)XPLMGetDatab(dr("icao").id,icao,0,31);
     std::string profile_error;
     const std::string aircraft_icao(icao);
+    const auto envelope=aircraft_geometry::load_envelope(aircraft_backend?aircraft_backend->id:"",aircraft_icao,std::filesystem::u8path(path));
+    runway_advisory.set_envelope(envelope);
+    log("RWY AHEAD envelope family="+std::string(aircraft_backend?aircraft_backend->id:"NONE")+
+        " ICAO="+aircraft_icao+" nose_m="+std::to_string(envelope.nose)+" tail_m="+std::to_string(envelope.tail)+
+        " half_span_m="+std::to_string(envelope.half_span)+" fallback_a320="+(envelope.fallback?"1":"0"));
     log("Aircraft manufacturer=\""+std::string(aircraft_backend?aircraft_backend->manufacturer:"UNKNOWN")+
         "\" family="+(aircraft_backend?aircraft_backend->id:"NONE")+" ICAO="+aircraft_icao+" model="+name);
     OANS_CONFIG("Aircraft model="+std::string(name)+" path="+path+" ICAO="+aircraft_icao);
@@ -845,6 +864,7 @@ void open_panel(int id,Panel panel) {
     log("ND UI view="+std::to_string(id)+" panel="+std::to_string(static_cast<int>(panel)));
 }
 void nearest_airport() {
+    route_pending_icao.clear();route_pending_query.clear();
     release_input();status="NEAREST AIRPORT MODE";manual_airport=false;airport.reset();a350_map.reset();
     runway_index=-1;choose_at=0;airport_position_pending=true;
     {
@@ -1183,6 +1203,37 @@ void draw_advisory(int id,bool pfd=false) {
     XPLMSetGraphicsState(0,1,0,0,1,0,0);XPLMBindTexture2d(map_font.texture(),0);
     draw_a350_vertices(vertices,render_gain);graphics();
 }
+void draw_route_plan(const MapProjection& projection) {
+    if(route_quads.empty()||airport_map_loading)return;
+    // Clip the strip against the same circular viewport as the A350 map.
+    std::vector<Vec2> clip;
+    for(int i=0;i<96;++i){double a=2*pi*i/96;clip.push_back(projection.anchor+Vec2{std::cos(a),std::sin(a)}*projection.radius);}
+    clip.push_back(clip.front());
+    XPLMSetGraphicsState(0,0,0,0,1,0,0);
+    glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
+    glColor4f(float(.10*render_gain),float(.55*render_gain),float(render_gain),.60f);
+    for(const auto& quad:route_quads) {
+        std::vector<Vec2> polygon;for(auto p:quad)polygon.push_back(projection.to(p));
+        auto cut=[&](Vec2 a,Vec2 b) {
+            auto cross=[](Vec2 u,Vec2 v){return u.x*v.y-u.y*v.x;};
+            std::vector<Vec2> out;if(polygon.empty())return;
+            auto previous=polygon.back();double before=cross(b-a,previous-a);
+            for(auto p:polygon) {
+                double after=cross(b-a,p-a);
+                if((after>=0)!=(before>=0))out.push_back(previous+(p-previous)*(before/(before-after)));
+                if(after>=0)out.push_back(p);
+                previous=p;before=after;
+            }
+            polygon=std::move(out);
+        };
+        for(size_t i=1;i<clip.size()&&!polygon.empty();++i)cut(clip[i-1],clip[i]);
+        cut({0,projection.bottom},{600,projection.bottom});cut({600,552},{0,552});
+        cut({0,552},{0,0});cut({600,0},{600,552});
+        if(polygon.size()<3)continue;
+        glBegin(GL_TRIANGLE_FAN);for(auto p:polygon)glVertex2d(p.x,p.y);glEnd();
+    }
+    graphics();
+}
 void draw_map(int id,bool nd) {
     OANS_TRACE_SCOPE();
     const float bg[]={0,0,0},pave[]={.243f,.243f,.243f};
@@ -1228,8 +1279,16 @@ void draw_map(int id,bool nd) {
         if(map_textures[id].update(vertices,map_font.texture(),a350_map->cache_stats(id).builds,XPLMGenerateTextureNumbers))
             map_textures[id].draw(render_gain,XPLMBindTexture2d,a350_map->base_view(id),input);
         else MapTexture::draw_fallback(vertices,render_gain,a350_map->base_view(id),input);
-        const auto& dynamic=a350_map->render_dynamic(input);
+        const bool planned_route=!route_quads.empty();
+        const auto& dynamic=planned_route?a350_map->render_compass(input):a350_map->render_dynamic(input);
+        XPLMSetGraphicsState(0,1,0,0,1,0,0);
         XPLMBindTexture2d(map_font.texture(),0);draw_a350_vertices(dynamic,render_gain);graphics();
+        if(planned_route) {
+            draw_route_plan(m);
+            const auto& aircraft=a350_map->render_aircraft(input);
+            XPLMSetGraphicsState(0,1,0,0,1,0,0);
+            XPLMBindTexture2d(map_font.texture(),0);draw_a350_vertices(aircraft,render_gain);graphics();
+        }
     } else {
         const bool loading=airport_map_loading;
         const std::string message=loading?"PLEASE WAIT":"ARPT NAV NOT AVAIL";
@@ -1893,6 +1952,186 @@ int test_wheel(XPLMWindowID w,int x,int y,int,int clicks,void*) {
     }
     return 1;
 }
+const Box route_field{20,144,620,184},route_apply{20,88,170,124},route_clear{190,88,340,124},route_close{470,88,620,124};
+double route_text_width(size_t first,size_t last) {
+    const auto s=route_query.substr(first,last-first);
+    return map_text&&map_font.ready()&&map_font.texture()?map_font.width(s,16):
+        XPLMMeasureString(xplmFont_Basic,s.data(),static_cast<int>(s.size()));
+}
+void route_scroll_to_caret() {
+    route_caret=std::min(route_caret,route_query.size());
+    route_anchor=std::min(route_anchor,route_query.size());
+    route_first=std::min(route_first,route_caret);
+    const double width=route_field.r-route_field.l-18;
+    while(route_first<route_caret&&route_text_width(route_first,route_caret)>width)++route_first;
+    while(route_first>0&&route_text_width(route_first-1,route_query.size())<=width)--route_first;
+}
+size_t route_position_at(double x) {
+    const double offset=x-route_field.l-8;
+    if(offset<=0)return route_first;
+    for(size_t i=route_first;i<route_query.size();++i)
+        if(offset<(route_text_width(route_first,i)+route_text_width(route_first,i+1))*.5)return i;
+    return route_query.size();
+}
+bool route_erase_selection() {
+    if(route_caret==route_anchor)return false;
+    const auto first=std::min(route_caret,route_anchor),last=std::max(route_caret,route_anchor);
+    route_query.erase(first,last-first);route_caret=route_anchor=first;return true;
+}
+void clear_route_plan(bool cancel_pending=true) {
+    route_plan={};route_quads.clear();
+    if(cancel_pending){route_pending_icao.clear();route_pending_query.clear();}
+}
+void update_route_title() {
+    const std::string title="ToLiss OANS - Route Plan ["+(airport?airport->icao:"----")+"]";
+    if(route_window&&route_window_title!=title) {
+        XPLMSetWindowTitle(route_window,title.c_str());route_window_title=title;
+    }
+}
+void close_route_plan() {
+    route_focused=route_dragging=false;if(route_window)XPLMSetWindowIsVisible(route_window,0);XPLMTakeKeyboardFocus(nullptr);
+}
+void activate_route_plan(const std::string& query) {
+    auto candidate=make_route_plan(*airport,query);
+    if(!candidate){route_message=candidate.error+(route_plan?" Previous route kept.":"");return;}
+    route_plan=std::move(candidate);route_quads=route_ribbon(route_plan.points);
+    route_message="ACTIVE "+airport->icao+" / "+std::to_string(int(route_plan.metres+.5))+" m";
+    log("Route plan "+airport->icao+": "+query+" ("+std::to_string(int(route_plan.metres)) +" m); stands="+route_plan.start_stand+" -> "+route_plan.end_stand);
+}
+void apply_route_plan() {
+    route_pending_icao.clear();route_pending_query.clear();
+    const auto parsed=parse_route_input(route_query);
+    if(!parsed.error.empty()){route_message=parsed.error;return;}
+    if(!parsed.icao.empty()&&(!airport||airport->icao!=parsed.icao||airport_map_loading)) {
+        std::optional<IndexEntry> entry;
+        {std::lock_guard<std::mutex> lock(db_mutex);
+            if(!index_ready){route_message="Airport index is loading. Try again shortly.";return;}
+            entry=find_airport(airport_index,parsed.icao);
+        }
+        if(!entry){route_message="Airport not found: "+parsed.icao;return;}
+        manual_airport=true;airport_position_pending=false;
+        request_airport(*entry);route_pending_icao=parsed.icao;route_pending_query=route_query;
+        route_message="LOADING "+parsed.icao+" / route will apply automatically.";return;
+    }
+    if(!airport||airport_map_loading){route_message="Wait for an airport map or include [ICAO].";return;}
+    activate_route_plan(route_query);
+}
+void open_route_plan() {
+    if(!route_window)return;
+    update_route_title();
+    release_input();XPLMSetWindowIsVisible(route_window,1);XPLMTakeKeyboardFocus(route_window);
+    route_focused=true;route_dragging=false;route_caret=route_anchor=route_query.size();route_scroll_to_caret();
+}
+void route_draw(XPLMWindowID w,void*) {
+    update_route_title();
+    DrawingState drawing_state(graphics,restore_graphics);
+    int l,t,r,b;XPLMGetWindowGeometry(w,&l,&t,&r,&b);
+    const float bg[]={.035f,.05f,.065f},fill[]={.08f,.1f,.12f};rect(l,b,r,t,bg);
+    auto button=[&](Box box,const std::string& label,bool focus=false) {
+        rect(l+box.l,b+box.b,l+box.r,b+box.t,focus?cyan:white);
+        rect(l+box.l+1,b+box.b+1,l+box.r-1,b+box.t-1,fill);
+        text(l+box.l+8,b+box.b+11,label,focus?cyan:white,box.r-box.l-16,16);
+    };
+    button(route_field,"",route_focused);
+    route_scroll_to_caret();
+    size_t last=route_first;
+    while(last<route_query.size()&&route_text_width(route_first,last+1)<=route_field.r-route_field.l-18)++last;
+    const double x=l+route_field.l+8,y=b+route_field.b+11;
+    if(route_focused&&route_caret!=route_anchor) {
+        const auto first_selected=std::max(route_first,std::min(route_caret,route_anchor));
+        const auto last_selected=std::min(last,std::max(route_caret,route_anchor));
+        const float selection[]={.08f,.32f,.45f};
+        if(first_selected<last_selected)
+            rect(x+route_text_width(route_first,first_selected),y-3,x+route_text_width(route_first,last_selected),y+18,selection);
+    }
+    text(x,y,route_query.substr(route_first,last-route_first),white,route_field.r-route_field.l-16,16,false);
+    if(route_focused) {
+        const double caret_x=x+route_text_width(route_first,route_caret);
+        line({caret_x,y-2},{caret_x,y+17},cyan);
+    }
+    button(route_apply,"Apply / Enter");button(route_clear,"Clear route");button(route_close,"Close");
+    text(l+20,b+64,route_message,route_plan?green:amber,600,14);
+    text(l+20,b+42,"Separators: space  -  ,  ;  /    |    Ctrl+A / Ctrl+V",white,600,14);
+    text(l+20,b+21,"[ZUCK] 608-P2-E8-D-E11-RW20L   /   ... 143 [ZUUU]",cyan,600,14);
+}
+void route_key_input(XPLMWindowID w,char key,XPLMKeyFlags flags,char virtual_key,void*,int losing) {
+    if(losing){route_focused=route_dragging=false;return;}
+    if(!enabled||!XPLMGetWindowIsVisible(w)||!(flags&xplm_DownFlag))return;
+    if(key==27){close_route_plan();return;}
+    if(key==13){apply_route_plan();return;}
+    auto append=[&](const std::string& text) {
+        route_erase_selection();
+        for(unsigned char c:text)if(c>=32&&c<127&&route_query.size()<512) {
+            route_query.insert(route_caret,1,char(c));++route_caret;
+        }
+        route_anchor=route_caret;route_scroll_to_caret();
+    };
+    const bool shift=(flags&xplm_ShiftFlag)!=0;
+    if(virtual_key==XPLM_VK_LEFT||virtual_key==XPLM_VK_RIGHT||virtual_key==XPLM_VK_HOME||virtual_key==XPLM_VK_END) {
+        if(virtual_key==XPLM_VK_HOME)route_caret=0;
+        else if(virtual_key==XPLM_VK_END)route_caret=route_query.size();
+        else if(!shift&&route_caret!=route_anchor)
+            route_caret=virtual_key==XPLM_VK_LEFT?std::min(route_caret,route_anchor):std::max(route_caret,route_anchor);
+        else if(virtual_key==XPLM_VK_LEFT&&route_caret>0)--route_caret;
+        else if(virtual_key==XPLM_VK_RIGHT&&route_caret<route_query.size())++route_caret;
+        if(!shift)route_anchor=route_caret;
+        route_scroll_to_caret();return;
+    }
+    if(flags&xplm_ControlFlag) {
+        if(virtual_key==XPLM_VK_A){route_anchor=0;route_caret=route_query.size();route_scroll_to_caret();return;}
+        if(virtual_key==XPLM_VK_V) {
+#ifdef _WIN32
+            if(OpenClipboard(nullptr)) {
+                if(auto data=GetClipboardData(CF_UNICODETEXT))if(auto p=static_cast<const wchar_t*>(GlobalLock(data))) {
+                    std::string pasted;for(size_t i=0;p[i]&&pasted.size()<512;++i) {
+                        if(p[i]==0xff0c||p[i]==0x3001)pasted+=',';
+                        else if(p[i]==0x2013||p[i]==0x2014)pasted+='-';
+                        else if(p[i]<128)pasted+=char(p[i]);
+                    }
+                    GlobalUnlock(data);append(pasted);
+                }
+                CloseClipboard();
+            }
+#else
+            append(clipboard_text());
+#endif
+        }
+        return;
+    }
+    if(key==8||virtual_key==XPLM_VK_DELETE) {
+        if(!route_erase_selection()) {
+            if(key==8&&route_caret>0)route_query.erase(--route_caret,1);
+            else if(virtual_key==XPLM_VK_DELETE&&route_caret<route_query.size())route_query.erase(route_caret,1);
+        }
+        route_anchor=route_caret;route_scroll_to_caret();return;
+    }
+    if(key>=32&&key<127)append(std::string(1,key));
+}
+int route_click(XPLMWindowID w,int x,int y,XPLMMouseStatus action,void*) {
+    if(!enabled)return 1;
+    int l,t,r,b;XPLMGetWindowGeometry(w,&l,&t,&r,&b);Vec2 p{double(x-l),double(y-b)};
+    if(action!=xplm_MouseDown) {
+        if(route_dragging) {
+            if(p.x<route_field.l+8&&route_first>0)--route_first;
+            else if(p.x>route_field.r-8&&route_caret<route_query.size())++route_first;
+            route_caret=route_position_at(std::clamp(p.x,route_field.l+8,route_field.r-8));
+            route_scroll_to_caret();
+        }
+        if(action==xplm_MouseUp)route_dragging=false;
+        return 1;
+    }
+    route_dragging=false;
+    if(route_close.contains(p))close_route_plan();
+    else {
+        XPLMTakeKeyboardFocus(w);route_focused=true;
+        if(route_field.contains(p)) {
+            route_scroll_to_caret();route_caret=route_anchor=route_position_at(p.x);route_dragging=true;
+        }
+        if(route_apply.contains(p))apply_route_plan();
+        if(route_clear.contains(p)){clear_route_plan();route_query.clear();route_caret=route_anchor=route_first=0;route_message="Route cleared.";}
+    }
+    return 1;
+}
 GLuint about_texture=0;
 GLContext about_context=nullptr;
 void about_release() {
@@ -1966,6 +2205,7 @@ void menu_action(void*,void* item) {
         case 17:views[0].follow=true;break;
         case 18:views[1].follow=true;break;
         case 19:toggle_test_window();break;
+        case 30:open_route_plan();break;
         case 23:if(about_window) {XPLMSetWindowIsVisible(about_window,1);XPLMTakeKeyboardFocus(about_window);}break;
         case 20:case 21:case 22:case 24:case 25:case 26:case 27:case 28:case 29: {
             release_input();
@@ -1976,17 +2216,19 @@ void menu_action(void*,void* item) {
             if(adsb) {
                 config.adsb_in=!config.adsb_in;traffic_sample_at=0;
                 if(!config.adsb_in)traffic_targets.clear();
-                XPLMCheckMenuItem(settings_menu,adsb_in_item,config.adsb_in?xplm_Menu_Checked:xplm_Menu_Unchecked);
+                check_menu_action(29,config.adsb_in);
                 log(config.adsb_in?"ADS-B IN ON":"ADS-B IN OFF");
             } else if(mcdu2) {
                 config.fms=!config.fms;
-                fms_port.clear(true);fms_bind_at=0;fms_generation_seen=0;choose_at=0;
-                XPLMCheckMenuItem(settings_menu,mcdu2_auto_item,config.fms?xplm_Menu_Checked:xplm_Menu_Unchecked);
+                if(fms_port.uses_mcdu_sampling_setting()) {
+                    fms_port.clear(true);fms_bind_at=0;fms_generation_seen=0;choose_at=0;
+                }
+                check_menu_action(28,config.fms);
                 log(config.fms?"Auto info from MCDU2 ON":"Auto info from MCDU2 OFF");
             } else if(cursor) {config.cursor_style=static_cast<int>(action-24);update_cursor_menu();}
             else if(bar) {
                 config.status_bar=!config.status_bar;
-                XPLMCheckMenuItem(settings_menu,status_bar_item,config.status_bar?xplm_Menu_Checked:xplm_Menu_Unchecked);
+                check_menu_action(22,config.status_bar);
             } else {config.simple_stand_names=action==20;update_stand_names();}
             current_surface.clear();
             surface_sample_at=0;
@@ -2031,6 +2273,11 @@ void create_ui() {
     w.drawWindowFunc=about_draw;w.handleMouseClickFunc=about_click;w.handleRightClickFunc=about_click;w.handleKeyFunc=about_key;
     about_window=XPLMCreateWindowEx(&w);
     if(about_window) {XPLMSetWindowTitle(about_window,"ToLiss OANS - About");XPLMSetWindowResizingLimits(about_window,about_width,about_height,about_width,about_height);}
+    w.left=left+120;w.top=top-100;w.right=w.left+640;w.bottom=w.top-200;
+    w.drawWindowFunc=route_draw;w.handleMouseClickFunc=route_click;w.handleRightClickFunc=route_click;
+    w.handleKeyFunc=route_key_input;w.handleMouseWheelFunc=nullptr;
+    route_window=XPLMCreateWindowEx(&w);
+    if(route_window){update_route_title();XPLMSetWindowResizingLimits(route_window,640,200,640,200);}
     menu_item=XPLMAppendMenuItem(XPLMFindPluginsMenu(),"ToLiss OANS",nullptr,0);
     menu=XPLMCreateMenu("ToLiss OANS",XPLMFindPluginsMenu(),menu_item,menu_action,nullptr);
     const char* labels[]={"Open Airport Map Window","Toggle captain ND map","Toggle FO ND map","Toggle ND calibration pattern","Write interface / click report","Reload config and aircraft profile","","Return to nearest airport",
@@ -2040,33 +2287,30 @@ void create_ui() {
     for(int i=0;i<18;++i) {
         if(i==6)continue; // Retired command slot; preserve existing OANS action IDs.
         auto token=reinterpret_cast<void*>(static_cast<std::intptr_t>(i+1));
-        if(i==0)XPLMAppendMenuItem(menu,labels[i],token,0);
         auto c=XPLMCreateCommand(paths[i],labels[i]);
         XPLMRegisterCommandHandler(c,command,1,token);commands.push_back({c,i+1});
     }
+    auto route_token=reinterpret_cast<void*>(static_cast<std::intptr_t>(30));
+    auto route_command=XPLMCreateCommand("toliss_oans/route_plan","Open taxi route planner");
+    XPLMRegisterCommandHandler(route_command,command,1,route_token);commands.push_back({route_command,30});
     auto test_token=reinterpret_cast<void*>(static_cast<std::intptr_t>(19));
-    XPLMAppendMenuItem(menu,"Test",test_token,0);
     auto test_command=XPLMCreateCommand("toliss_oans/test","Open runway advisory test window");
     XPLMRegisterCommandHandler(test_command,command,1,test_token);commands.push_back({test_command,19});
-    const int setting_item=XPLMAppendMenuItem(menu,"Setting",nullptr,0);
-    settings_menu=XPLMCreateMenu("Setting",menu,setting_item,menu_action,nullptr);
-    const int stand_item=XPLMAppendMenuItem(settings_menu,"Stand name",nullptr,0);
-    stand_name_menu=XPLMCreateMenu("Stand name",settings_menu,stand_item,menu_action,nullptr);
-    XPLMAppendMenuItem(stand_name_menu,"Simple",reinterpret_cast<void*>(std::intptr_t(20)),0);
-    XPLMAppendMenuItem(stand_name_menu,"Complex",reinterpret_cast<void*>(std::intptr_t(21)),0);
-    status_bar_item=XPLMAppendMenuItem(settings_menu,"stus_bar",reinterpret_cast<void*>(std::intptr_t(22)),0);
-    XPLMCheckMenuItem(settings_menu,status_bar_item,config.status_bar?xplm_Menu_Checked:xplm_Menu_Unchecked);
+    std::map<std::string,XPLMMenuID> parents{{"root",menu}};
+    for(const auto& entry:menu_layout) {
+        const auto parent=parents.at(entry.parent);
+        const auto token=reinterpret_cast<void*>(static_cast<std::intptr_t>(entry.action));
+        const int index=XPLMAppendMenuItem(parent,entry.label,token,0);
+        if(entry.action==0) {
+            const auto child=XPLMCreateMenu(entry.label,parent,index,menu_action,nullptr);
+            parents.emplace(entry.id,child);submenus.push_back(child);
+        } else menu_bindings.at(entry.action)={parent,index};
+    }
     update_stand_names();
-    const int cursor_item=XPLMAppendMenuItem(settings_menu,"Cursor",nullptr,0);
-    cursor_menu=XPLMCreateMenu("Cursor",settings_menu,cursor_item,menu_action,nullptr);
-    const char* cursor_labels[]={"Pink - Vertical (default)","Pink - Horizontal","Yellow - Vertical","Yellow - Horizontal"};
-    for(int i=0;i<4;++i)XPLMAppendMenuItem(cursor_menu,cursor_labels[i],reinterpret_cast<void*>(std::intptr_t(24+i)),0);
     update_cursor_menu();
-    mcdu2_auto_item=XPLMAppendMenuItem(settings_menu,"auto info from mcdu2",reinterpret_cast<void*>(std::intptr_t(28)),0);
-    XPLMCheckMenuItem(settings_menu,mcdu2_auto_item,config.fms?xplm_Menu_Checked:xplm_Menu_Unchecked);
-    adsb_in_item=XPLMAppendMenuItem(settings_menu,"show traffic",reinterpret_cast<void*>(std::intptr_t(29)),0);
-    XPLMCheckMenuItem(settings_menu,adsb_in_item,config.adsb_in?xplm_Menu_Checked:xplm_Menu_Unchecked);
-    XPLMAppendMenuItem(menu,"About",reinterpret_cast<void*>(std::intptr_t(23)),0);
+    check_menu_action(22,config.status_bar);
+    check_menu_action(28,config.fms);
+    check_menu_action(29,config.adsb_in);
 }
 float tick(float elapsed,float,int,void*) {
     OANS_TRACE_SCOPE();
@@ -2080,9 +2324,9 @@ float tick(float elapsed,float,int,void*) {
         log_display_state();
         if(aircraft_ok&&heartbeat>=fms_bind_at) {
             fms_bind_at=heartbeat+5;
-            if(config.fms)fms_port.bind();else fms_port.bind_activity();
+            if(fms_port.sampling_enabled(config.fms))fms_port.bind();else fms_port.bind_activity();
         }
-        fms_port.tick(heartbeat,config.fms&&aircraft_ok&&aircraft_backend->powered(aircraft_data));
+        fms_port.tick(heartbeat,fms_port.sampling_enabled(config.fms)&&aircraft_ok&&aircraft_backend->powered(aircraft_data));
         if(fms_generation_seen!=fms_port.generation()) {
             fms_generation_seen=fms_port.generation();
             choose_at=0;
@@ -2133,12 +2377,17 @@ float tick(float elapsed,float,int,void*) {
             pending_map_is_building_refresh=false;
             err=std::move(worker_error);worker_error.clear();}
         if(!err.empty()) {status="AIRPORT DATA ERROR: "+err;log(status);}
+        if(!route_pending_icao.empty()&&(!err.empty()||last_requested!=route_pending_icao)) {
+            route_message=err.empty()?"Airport selection changed. Apply the route again.":"Airport load failed: "+err;
+            route_pending_icao.clear();route_pending_query.clear();
+        }
         if(advisory_test.pending&&(!err.empty()||last_requested!=advisory_test.requested_airport)) {
             stop_advisory_test();advisory_test.message=err.empty()?"Airport selection changed. Enable test again.":"AIRPORT LOAD FAILED: "+err;
         }
         if(loaded&&loaded->icao!=last_requested) {log("Discarded superseded airport load: "+loaded->icao);loaded.reset();}
         if(loaded) {
             airport_map_loading=false;
+            clear_route_plan(false);route_message="Airport changed. Apply a route for the current airport.";
             status="AIRPORT LOADED";airport=std::move(loaded);a350_map=std::move(loaded_map);runway_index=-1;
             if(!map_note.empty())log(map_note);
             for(auto& s:views) {
@@ -2161,6 +2410,10 @@ float tick(float elapsed,float,int,void*) {
             for(auto& view:views) {view.feature_selection=-1;view.feature_dropdown=view.feature_initial_dropdown=false;view.feature_first=0;view.feature_initial='-';}
             status="LOADED "+airport->icao+" "+airport->name;log(status);select_runway(0);
             finish_advisory_test();
+            if(route_pending_icao==airport->icao) {
+                const auto query=route_pending_query;route_pending_icao.clear();route_pending_query.clear();
+                activate_route_plan(query);
+            }
         } else if(loaded_map&&airport&&map_icao==airport->icao&&map_icao==last_requested) {
             a350_map=std::move(loaded_map);
             if(!map_note.empty())log(map_note);
@@ -2213,6 +2466,8 @@ void cleanup() {
     commands.clear();
     if(mouse_window)XPLMDestroyWindow(mouse_window);
     mouse_window=nullptr;
+    if(route_window)XPLMDestroyWindow(route_window);
+    route_window=nullptr;route_window_title.clear();route_focused=false;clear_route_plan();
     about_release();
     if(about_window)XPLMDestroyWindow(about_window);
     about_window=nullptr;
@@ -2220,13 +2475,8 @@ void cleanup() {
     test_window=nullptr;
     if(window)XPLMDestroyWindow(window);
     window=nullptr;
-    if(stand_name_menu)XPLMDestroyMenu(stand_name_menu);
-    stand_name_menu=nullptr;
-    if(cursor_menu)XPLMDestroyMenu(cursor_menu);
-    cursor_menu=nullptr;
-    if(settings_menu)XPLMDestroyMenu(settings_menu);
-    settings_menu=nullptr;
-    status_bar_item=-1;mcdu2_auto_item=-1;adsb_in_item=-1;current_surface.clear();
+    for(auto i=submenus.rbegin();i!=submenus.rend();++i)if(*i)XPLMDestroyMenu(*i);
+    submenus.clear();menu_bindings={};current_surface.clear();
     if(menu)XPLMDestroyMenu(menu);
     menu=nullptr;
     if(menu_item>=0)XPLMRemoveMenuItem(XPLMFindPluginsMenu(),menu_item);
@@ -2298,13 +2548,14 @@ PLUGIN_API int XPluginStart(char* name,char* signature,char* description) {
 }
 PLUGIN_API void XPluginStop() {{OANS_TRACE_SCOPE();cleanup();OANS_TRACE("Plugin shutdown complete");}detail::shutdown();}
 PLUGIN_API int XPluginEnable() {OANS_TRACE_SCOPE();enabled=true;return 1;}
-PLUGIN_API void XPluginDisable() {OANS_TRACE_SCOPE();enabled=false;traffic_targets.clear();runway_advisory.reset();stop_advisory_test();if(test_window)close_test_window();fms_port.clear(true);release_input();status="PLUGIN DISABLED";}
+PLUGIN_API void XPluginDisable() {OANS_TRACE_SCOPE();enabled=false;traffic_targets.clear();runway_advisory.reset();stop_advisory_test();if(test_window)close_test_window();if(route_window)close_route_plan();route_pending_icao.clear();route_pending_query.clear();fms_port.clear(true);release_input();status="PLUGIN DISABLED";}
 PLUGIN_API void XPluginReceiveMessage(XPLMPluginID from,int message,void* param) {
     OANS_TRACE_SCOPE();OANS_TRACE("SDK message from="+std::to_string(from)+" message="+std::to_string(message)+" param="+std::to_string(reinterpret_cast<std::intptr_t>(param)));
     (void)from;
     if(message==XPLM_MSG_AIRPORT_LOADED||
        ((message==XPLM_MSG_PLANE_LOADED||message==XPLM_MSG_PLANE_UNLOADED)&&reinterpret_cast<std::intptr_t>(param)==0)) {
         stop_advisory_test();if(test_window)close_test_window();
+        clear_route_plan();if(route_window)close_route_plan();
         nearest_airport();first_oans_open=true;
         runway_advisory.reset();advisory_airport.reset();advisory_choose_at=0;
         {std::lock_guard<std::mutex> lock(db_mutex);

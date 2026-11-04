@@ -212,6 +212,12 @@ const std::vector<A350Vertex>& A350Map::render_dynamic(const A350View& view) {
     // The tiny dynamic layer has its own buffer and never invalidates the base.
     return render_impl(3,view,2);
 }
+const std::vector<A350Vertex>& A350Map::render_compass(const A350View& view) {
+    return render_impl(3,view,3);
+}
+const std::vector<A350Vertex>& A350Map::render_aircraft(const A350View& view) {
+    return render_impl(3,view,4);
+}
 const std::vector<A350Vertex>& A350Map::render_impl(int side,const A350View& view,int layer) {
     OANS_TRACE_SCOPE();
     OANS_TRACE("A350 render side="+std::to_string(side)+" mode="+std::to_string(view.mode)+" range="+std::to_string(view.range)+" scale="+std::to_string(view.scale));

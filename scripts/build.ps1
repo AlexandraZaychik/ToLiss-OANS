@@ -27,6 +27,12 @@ try {
     & $compiler @common 'src/core.cpp' 'tools/dsf_buildings_probe.cpp' @dsfArgs '-o' (Join-Path $buildDir 'dsf_buildings_probe.exe')
     if ($LASTEXITCODE -ne 0) { throw 'Runtime DSF probe compilation failed' }
     $luaArgs = @('-Ivendor/lua-5.4.9/src','src/a350_map.cpp',(Join-Path $buildDir 'lua/liblua.a'))
+    & $compiler @common 'src/core.cpp' 'src/runway_ahead.cpp' 'tests/route_layer_tests.cpp' @luaArgs '-o' (Join-Path $buildDir 'route_layer_tests.exe')
+    if ($LASTEXITCODE -ne 0) { throw 'Route layer test compilation failed' }
+    if (!$SkipTests) {
+        & (Join-Path $buildDir 'route_layer_tests.exe') (Join-Path $projectRoot 'assets') (Join-Path $buildDir 'route-layer-fixture.dat')
+        if ($LASTEXITCODE -ne 0) { throw 'Route layer tests failed' }
+    }
     & $compiler @common '-Ivendor/lua-5.4.9/src' 'tests/lua_vertex_buffer_tests.cpp' (Join-Path $buildDir 'lua/liblua.a') '-o' (Join-Path $buildDir 'lua_vertex_buffer_tests.exe')
     if ($LASTEXITCODE -ne 0) { throw 'Lua vertex buffer test compilation failed' }
     if (!$SkipTests) {
@@ -46,6 +52,12 @@ try {
     if (!$SkipTests) {
         & (Join-Path $buildDir 'oans_tests.exe')
         if ($LASTEXITCODE -ne 0) { throw 'Core tests failed' }
+    }
+    & $compiler @common 'src/core.cpp' 'tests/route_plan_tests.cpp' '-o' (Join-Path $buildDir 'route_plan_tests.exe')
+    if ($LASTEXITCODE -ne 0) { throw 'Route plan test compilation failed' }
+    if (!$SkipTests) {
+        & (Join-Path $buildDir 'route_plan_tests.exe')
+        if ($LASTEXITCODE -ne 0) { throw 'Route plan tests failed' }
     }
     & $compiler @common 'src/core.cpp' 'src/runway_ahead.cpp' 'tests/runway_ahead_tests.cpp' '-o' (Join-Path $buildDir 'runway_ahead_tests.exe')
     if ($LASTEXITCODE -ne 0) { throw 'Runway advisory test compilation failed' }
@@ -95,7 +107,7 @@ try {
         $packageDir = Join-Path $projectRoot ('dist/'+$packageName)
         New-Item -ItemType Directory -Force (Join-Path $packageDir '64') | Out-Null
         $flavorArgs = if($flavor -eq 'Debug'){@('-DOANS_DEBUG=1','-Og','-g','-fno-omit-frame-pointer')}else{@('-DOANS_DEBUG=0','-O2','-s')}
-        & $compiler @common @flavorArgs '-shared' '-DIBM=1' '-DAPL=0' '-DLIN=0' '-DXPLM200' '-DXPLM210' '-DXPLM300' '-DXPLM301' '-DXPLM303' '-DNOMINMAX' "-I$SdkRoot\CHeaders\XPLM" 'src/core.cpp' 'src/runway_ahead.cpp' 'src/fms.cpp' 'src/aircraft/toliss/mcdu.cpp' 'src/aircraft/backend.cpp' 'src/aircraft/toliss/backend.cpp' 'src/aircraft/lr/backend.cpp' 'src/aircraft/lr/mcdu.cpp' 'src/aircraft/lr/mcdu_xplm.cpp' 'src/aircraft/toliss/mcdu_xplm.cpp' 'src/nd_ui.cpp' 'src/plugin.cpp' 'src/aircraft/toliss/profile.cpp' @luaArgs @dsfArgs (Join-Path $SdkRoot 'Libraries\Win\XPLM_64.lib') '-lopengl32' '-lglu32' '-lgdi32' '-lwinhttp' '-o' (Join-Path $packageDir '64\win.xpl')
+        & $compiler @common @flavorArgs '-shared' '-DIBM=1' '-DAPL=0' '-DLIN=0' '-DXPLM200' '-DXPLM210' '-DXPLM300' '-DXPLM301' '-DXPLM303' '-DNOMINMAX' "-I$SdkRoot\CHeaders\XPLM" 'src/core.cpp' 'src/runway_ahead.cpp' 'src/fms.cpp' 'src/aircraft/toliss/mcdu.cpp' 'src/aircraft/backend.cpp' 'src/aircraft/toliss/backend.cpp' 'src/aircraft/zibo/backend.cpp' 'src/aircraft/zibo/fms_xplm.cpp' 'src/aircraft/lr/backend.cpp' 'src/aircraft/lr/mcdu.cpp' 'src/aircraft/lr/mcdu_xplm.cpp' 'src/aircraft/toliss/mcdu_xplm.cpp' 'src/nd_ui.cpp' 'src/plugin.cpp' 'src/aircraft/toliss/profile.cpp' @luaArgs @dsfArgs (Join-Path $SdkRoot 'Libraries\Win\XPLM_64.lib') '-lopengl32' '-lglu32' '-lgdi32' '-lwinhttp' '-o' (Join-Path $packageDir '64\win.xpl')
         if ($LASTEXITCODE -ne 0) { throw 'Native plugin compilation failed' }
         Copy-Item -LiteralPath (Join-Path $projectRoot 'config.ini') -Destination $packageDir -Force
         Copy-Item -LiteralPath (Join-Path $projectRoot 'config') -Destination $packageDir -Recurse -Force

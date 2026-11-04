@@ -9,6 +9,8 @@ class FmsSource {
 public:
     virtual ~FmsSource()=default;
     void (*log_event)(const std::string&)=nullptr;
+    // CDU automation follows the user's sampling switch; direct sources may opt out.
+    virtual bool uses_mcdu_sampling_setting() const {return true;}
     virtual bool bind()=0;
     virtual void bind_activity()=0;
     virtual void tick(double now,bool usable)=0;
@@ -37,6 +39,8 @@ public:
     void clear(bool restore) {if(source_)source_->clear(restore);}
     void reset_tracking() {if(source_)source_->reset_tracking();}
     bool ready() const {return source_&&source_->ready();}
+    bool uses_mcdu_sampling_setting() const {return !source_||source_->uses_mcdu_sampling_setting();}
+    bool sampling_enabled(bool mcdu_enabled) const {return source_&&(mcdu_enabled||!uses_mcdu_sampling_setting());}
     const FmsPlan& plan() const {return source_?source_->plan():empty_;}
     const std::string& status() const {return source_?source_->status():disconnected_;}
     unsigned generation() const {return source_?source_->generation():0;}

@@ -35,6 +35,20 @@ inline double brightness(const DataAccess& d,int side,bool pfd) {
     const int index=pfd ? ::profile::current.pfd_brightness[side] : ::profile::current.nd_brightness[side];
     return d.value("bright",index,0);
 }
+inline bool advisory_available(const DataAccess& d,int side,bool pfd) {
+    // Advisory overlays are independent of the OANS map range. PFD also does
+    // not depend on the ND mode or power state; use its own display controller.
+    const auto state=key(pfd?"pfd_state":"nd_state",side);
+    if(!d.numeric(state,0)||d.value(state,0,0)!=3)return false;
+    for(const char* name:{"swap","ecam"}) {
+        const auto control=key(name,side);
+        if(!d.numeric(control,0)||d.value(control,0,0)!=0)return false;
+    }
+    const int mode=nd_mode(d,side);
+    if(!pfd&&(mode<2||mode>4))return false;
+    const int index=pfd?::profile::current.pfd_brightness[side] : ::profile::current.nd_brightness[side];
+    return d.numeric("bright",index)&&brightness(d,side,pfd)>=.01;
+}
 inline const char* overlay_blocked(const DataAccess& d,int side,bool test) {
     if(!display_on(d,side))return "LR ND OFF / WARMUP / SELF TEST";
     if(std::abs(d.value(key("range",side),0,-1)-10)>.01)return "SET PHYSICAL ND RANGE TO 10";

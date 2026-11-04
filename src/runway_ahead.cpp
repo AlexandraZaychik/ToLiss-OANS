@@ -53,18 +53,18 @@ std::vector<RunwayAheadHit> test_runways(const Airport& airport,const std::strin
 namespace {
 // Continuous SAT: intersect time intervals on the two rectangles' axes.
 // This is the translating form of A350 RWYA.overlap's separating-axis test.
-double entry_time(const Runway& r,Vec2 p,Vec2 forward,double speed) {
+double entry_time(const Runway& r,Vec2 p,Vec2 forward,double speed,const aircraft_geometry::Envelope& envelope) {
     const auto u=r.axis();const Vec2 n{u.y,-u.x},right{forward.y,-forward.x};
     const double lo=-r.stopway_start-RunwayAhead::margin;
     const double hi=r.length()+r.stopway_end+RunwayAhead::margin;
     const auto center=r.start+u*((lo+hi)*.5);
     const double along=(hi-lo)*.5,across=r.width*.5+RunwayAhead::margin;
-    const auto ac=p+forward*((RunwayAhead::nose-RunwayAhead::tail)*.5);
+    const auto ac=p+forward*((envelope.nose-envelope.tail)*.5);
     double enter=0,leave=RunwayAhead::horizon;
     for(auto axis:{u,n,forward,right}) {
         const double radius=along*std::abs(dot(u,axis))+across*std::abs(dot(n,axis))+
-            (RunwayAhead::nose+RunwayAhead::tail)*.5*std::abs(dot(forward,axis))+
-            RunwayAhead::half_span*std::abs(dot(right,axis));
+            (envelope.nose+envelope.tail)*.5*std::abs(dot(forward,axis))+
+            envelope.half_span*std::abs(dot(right,axis));
         const double d=dot(ac-center,axis),v=speed*dot(forward,axis);
         if(std::abs(v)<1e-9) {if(std::abs(d)>radius)return INFINITY;}
         else {
@@ -77,6 +77,14 @@ double entry_time(const Runway& r,Vec2 p,Vec2 forward,double speed) {
 }
 }
 void RunwayAhead::reset() {states_.clear();airport_.clear();low_speed_=clock_=0;hits_.clear();}
+void RunwayAhead::set_envelope(const aircraft_geometry::Envelope& envelope) {
+    auto next=envelope;
+    if(!std::isfinite(next.nose)||!std::isfinite(next.tail)||!std::isfinite(next.half_span)||
+       next.nose<=0||next.tail<=0||next.half_span<=0)next=aircraft_geometry::default_envelope;
+    if(next.nose!=envelope_.nose||next.tail!=envelope_.tail||next.half_span!=envelope_.half_span||
+       next.fallback!=envelope_.fallback)reset();
+    envelope_=next;
+}
 const std::vector<RunwayAheadHit>& RunwayAhead::update(const Airport* a,const RunwayAheadInput& in,double dt) {
     const bool valid=in.valid&&std::isfinite(in.speed)&&in.speed>=0&&std::isfinite(in.heading)&&
         std::isfinite(in.position.x)&&std::isfinite(in.position.y)&&std::isfinite(dt)&&dt>=0;
@@ -93,7 +101,7 @@ const std::vector<RunwayAheadHit>& RunwayAhead::update(const Airport* a,const Ru
         if(!seen.insert(key).second||!std::isfinite(r.length())||r.length()<1||!std::isfinite(r.width)||r.width<=0||
            !std::isfinite(r.stopway_start)||!std::isfinite(r.stopway_end)||r.stopway_start<0||r.stopway_end<0)continue;
         auto& s=states_[key];
-        const double eta=entry_time(r,in.position,forward,in.speed);
+        const double eta=entry_time(r,in.position,forward,in.speed,envelope_);
         const bool predicted=std::isfinite(eta),inside=predicted&&eta<=1e-9;
         if(inside) {s.inside_age=s.inside?s.inside_age+dt:0;}
         else s.inside_age=0;

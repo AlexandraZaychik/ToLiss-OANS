@@ -3840,7 +3840,7 @@ function a350_render(cx, cy, scale, angle, ax, ay, lat, lon, psi, mag, mode, rng
         DL.clip = {-64,664,-64,664}
         DL.pad = 32 -- local units; geometry clips separately from atlas text.
     end
-    if layer ~= 2 then
+    if layer == 0 or layer == 1 then
     MAPX.surfaces(C)
     -- Keep the original runway geometry, projection, polygon fill and clipping.
     -- The host supplies the ANF threats instead of the upstream first-hit RWYA.
@@ -3871,8 +3871,10 @@ function a350_render(cx, cy, scale, angle, ax, ay, lat, lon, psi, mag, mode, rng
     select_stand_names(G, simple_stand_names)
     MAPX.labels(C)
     end -- base layer: surfaces, runway fill, tower and labels
-    if layer ~= 1 then
+    if layer == 0 or layer == 2 or layer == 3 then
     NDUI.compass(C)
+    end
+    if layer == 0 or layer == 2 or layer == 4 then
     local ownship_scale = 0.8
     for _, target in ipairs(traffic or {}) do
             local tx, ty = C.XY(G.W(target[1],target[2]))

@@ -1,0 +1,18 @@
+// Developer menu order. Edit with scripts/menu-arrange.ps1, then rebuild the plugin.
+// OANS_MENU(stable_id, parent_id, label, action_id); action 0 creates a submenu.
+OANS_MENU(map_window, root, "Open Airport Map Window", 1)
+OANS_MENU(route_plan, root, "Route Plan", 30)
+OANS_MENU(settings, root, "Setting", 0)
+OANS_MENU(stand_name, settings, "Stand name", 0)
+OANS_MENU(stand_simple, stand_name, "Simple", 20)
+OANS_MENU(stand_complex, stand_name, "Complex", 21)
+OANS_MENU(status_bar, settings, "stus_bar", 22)
+OANS_MENU(cursor, settings, "Cursor", 0)
+OANS_MENU(cursor_pink_vertical, cursor, "Pink - Vertical (default)", 24)
+OANS_MENU(cursor_pink_horizontal, cursor, "Pink - Horizontal", 25)
+OANS_MENU(cursor_yellow_vertical, cursor, "Yellow - Vertical", 26)
+OANS_MENU(cursor_yellow_horizontal, cursor, "Yellow - Horizontal", 27)
+OANS_MENU(mcdu2_auto, settings, "auto info from mcdu2", 28)
+OANS_MENU(traffic, settings, "show traffic", 29)
+OANS_MENU(about, root, "About", 23)
+OANS_MENU(test, root, "Test", 19)
