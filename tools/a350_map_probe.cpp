@@ -58,7 +58,7 @@ void test_stand_settings(const std::filesystem::path& assets) {
         v.traffic[0].flight_id="CES1234";v.traffic[0].icao_type="A320";v.traffic[0].ground_speed_kt=20;
         if(!equal(production,mixed->render_dynamic(v)))throw std::runtime_error("Production traffic metadata labels must stay hidden");
         auto empty=v;empty.traffic.clear();const auto plain=mixed->render_dynamic(empty);
-        if(colour_count(production,0xFFFFFFFF)-colour_count(plain,0xFFFFFFFF)!=36)
+        if(colour_count(production,0xFFFFFFFF)-colour_count(plain,0xFFFFFFFF)!=18)
             throw std::runtime_error("Hidden labels must retain only the traffic aircraft symbol");
         std::cout<<"PASS production ADS-B labels hidden; traffic symbol remains during IRS alignment\n";
         // Keep the retained label implementation covered using a test-only asset.
@@ -426,8 +426,8 @@ int main(int argc,char** argv) {
         const auto& traffic_vertices=engine.render(2,traffic_view);
         const auto white_delta=static_cast<long long>(colour_count(traffic_vertices,0xFFFFFFFF))-
                               static_cast<long long>(colour_count(vertices,0xFFFFFFFF));
-        if(white_delta!=static_cast<long long>(selected.size())*36) {
-            std::ostringstream error;error<<"Selected traffic must add 36 white symbol vertices each: delta="<<white_delta
+        if(white_delta!=static_cast<long long>(selected.size())*18) {
+            std::ostringstream error;error<<"Selected traffic must add 18 white symbol vertices each: delta="<<white_delta
                 <<" targets="<<selected.size();throw std::runtime_error(error.str());
         }
         auto traffic_path=std::filesystem::u8path(argv[4]);
@@ -447,7 +447,7 @@ int main(int argc,char** argv) {
             throw std::runtime_error("Unavailable position must remove the actual magenta ownship geometry");
         auto hidden_without_traffic=hidden_view;hidden_without_traffic.traffic.clear();
         const auto hidden_plain=engine.render(2,hidden_without_traffic);
-        if(colour_count(hidden,0xFFFFFFFF)-colour_count(hidden_plain,0xFFFFFFFF)!=selected.size()*36)
+        if(colour_count(hidden,0xFFFFFFFF)-colour_count(hidden_plain,0xFFFFFFFF)!=selected.size()*18)
             throw std::runtime_error("Unavailable ownship position must retain ADS-B traffic geometry");
         const auto& restored=engine.render(2,traffic_view);
         if(colour_count(restored,0xFFFF5AFF)!=colour_count(vertices,0xFFFF5AFF)||restored.size()!=traffic_vertex_count)

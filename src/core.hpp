@@ -64,6 +64,9 @@ struct Airport {
     std::vector<PaintedLine> markings;
 };
 struct RunwaySize { double length = 0, width = 0; };
+// Match the physical runway rectangle containing ownship. Heading distinguishes
+// intersecting runways; either landing direction is accepted.
+const Runway* runway_at(const Airport& airport,Vec2 position,double heading);
 // Actual runway rectangle, then stand within 20 m, then heading-aware taxi route
 // within 15 m (including anonymous routes). Empty for anonymous/unknown or
 // names longer than five UTF-8 characters; never fall through to another name.

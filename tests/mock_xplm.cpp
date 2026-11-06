@@ -217,6 +217,7 @@ XPLMDataRef XPLMFindDataRef(const char* name) {
     if(n.find("acf_ICAO")!=std::string::npos||n=="sim/aircraft/view/acf_ui_name")d.type=xplmType_Data;
     if(fms_enabled&&n.rfind("AirbusFBW/MCDU2",0)==0)d.type=xplmType_Data;
     if(n=="AirbusFBW/ECAMFlightPhase")d.type=xplmType_Int;
+    if(n=="laminar/A333/data/flight_phase")d.type=xplmType_Double;
     if(n=="sim/flightmodel/position/latitude")d.values[0]=30;
     if(n=="sim/flightmodel/position/longitude")d.values[0]=120.012;
     if(n=="sim/flightmodel/position/psi")d.values[0]=90;

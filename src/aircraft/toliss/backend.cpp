@@ -100,6 +100,7 @@ const aircraft::Backend& backend() {
             {"mode0","AirbusFBW/NDmodeCapt"},{"mode1","AirbusFBW/NDmodeFO"},
             {"map0","AirbusFBW/CaptMAPAvail"},{"map1","AirbusFBW/CoMAPAvail"},
             {"irs_align","AirbusFBW/TimeToAlign"},
+            {"plan_phase","AirbusFBW/ECAMFlightPhase"},
             {"bright","AirbusFBW/DUBrightness"},{"fallback","AirbusFBW/DisplayResolutionFallback"},
             {"swap0","AirbusFBW/PFDNDToggleCapt"},{"swap1","AirbusFBW/PFDNDToggleCo"},
             {"ecamSwap","AirbusFBW/ECAMNDSwitching"}

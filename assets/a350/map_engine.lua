@@ -2484,16 +2484,23 @@ local function segs_text(x, y, segs)
     return x
 end
 
--- eigenes Flugzeug wie im OANS: magentafarbenes Kreuz (Rumpf, Flaechen, Leitwerk) mit dunklem Rand
+-- Angular aircraft cross: flat nose, square wingtips and narrow tailplane.
 local function draw_plane(px, py, th, col, k)
     k = k or 1
     local fx, fy = math.sin(th) * k, -math.cos(th) * k
     local rx, ry = math.cos(th) * k, math.sin(th) * k
+    local function bar(x0, y0, x1, y1, c)
+        DL.quadf(px+rx*x0+fx*y0, py+ry*x0+fy*y0,
+                 px+rx*x1+fx*y0, py+ry*x1+fy*y0,
+                 px+rx*x1+fx*y1, py+ry*x1+fy*y1,
+                 px+rx*x0+fx*y1, py+ry*x0+fy*y1, c)
+    end
     for pass = 1, 2 do
-        local c, w = (pass == 1) and 0xFF000000 or col, ((pass == 1) and 7 or 4) * k
-        DL.line(px + fx * 16, py + fy * 16, px - fx * 20, py - fy * 20, c, w)
-        DL.line(px + fx * 3 - rx * 17, py + fy * 3 - ry * 17, px + fx * 3 + rx * 17, py + fy * 3 + ry * 17, c, w)
-        DL.line(px - fx * 15 - rx * 7, py - fy * 15 - ry * 7, px - fx * 15 + rx * 7, py - fy * 15 + ry * 7, c, w)
+        local c = (pass == 1) and 0xFF000000 or col
+        local edge = (pass == 1) and 1.5 or 0
+        bar(-1.5-edge, -20-edge, 1.5+edge, 16+edge, c)
+        bar(-17-edge, 1.5-edge, 17+edge, 4.5+edge, c)
+        bar(-6-edge, -16.5-edge, 6+edge, -13.5+edge, c)
     end
 end
 

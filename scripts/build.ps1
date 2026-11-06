@@ -59,6 +59,12 @@ try {
         & (Join-Path $buildDir 'route_plan_tests.exe')
         if ($LASTEXITCODE -ne 0) { throw 'Route plan tests failed' }
     }
+    & $compiler @common 'src/core.cpp' 'tests/plan_airport_tests.cpp' '-o' (Join-Path $buildDir 'plan_airport_tests.exe')
+    if ($LASTEXITCODE -ne 0) { throw 'PLAN airport test compilation failed' }
+    if (!$SkipTests) {
+        & (Join-Path $buildDir 'plan_airport_tests.exe')
+        if ($LASTEXITCODE -ne 0) { throw 'PLAN airport tests failed' }
+    }
     & $compiler @common 'src/core.cpp' 'src/runway_ahead.cpp' 'tests/runway_ahead_tests.cpp' '-o' (Join-Path $buildDir 'runway_ahead_tests.exe')
     if ($LASTEXITCODE -ne 0) { throw 'Runway advisory test compilation failed' }
     if (!$SkipTests) {

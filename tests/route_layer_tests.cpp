@@ -1,4 +1,5 @@
 #include "a350_map.hpp"
+#include "map_viewport.hpp"
 #include <fstream>
 #include <iostream>
 #include <stdexcept>
@@ -27,5 +28,29 @@ int main(int argc,char** argv) {
         if(!map.render_aircraft(view).empty())throw std::runtime_error("Aircraft pass contains non-aircraft geometry");
         if(map.render_compass(view).empty())throw std::runtime_error("Compass pass lost its geometry");
         std::cout<<"PASS dynamic layer == compass + aircraft; aircraft-only pass excludes map and compass\n";
+        // Exercise the real atlas quads, including the large "21" at 210 deg.
+        // Checking the ring alone misses captions erased by the host header.
+        view.mode=3;
+        for(int heading=0;heading<360;++heading) {
+            view.mag=heading;
+            const auto closed=map_viewport(3,false,110),open=map_viewport(3,true,110);
+            view.anchor=closed.anchor;view.radius=closed.radius;view.bottom=closed.bottom;
+            const auto before=map.render_compass(view);
+            view.anchor=open.anchor;view.radius=open.radius;view.bottom=open.bottom;
+            const auto after=map.render_compass(view);
+            if(before.size()!=after.size())throw std::runtime_error("Menu changes compass glyph count");
+            bool text=false;
+            for(size_t i=0;i<after.size();++i) {
+                const auto& a=before[i];const auto& b=after[i];
+                if(a.x!=b.x||a.y!=b.y||a.u!=b.u||a.v!=b.v||a.rgba!=b.rgba)
+                    throw std::runtime_error("Menu moves compass geometry");
+                if(b.rgba==0xFFFFFFFF) {
+                    text=true;
+                    if(b.y>=552)throw std::runtime_error("Heading glyph is covered by the host header");
+                }
+            }
+            if(!text)throw std::runtime_error("ARC lost its heading labels");
+        }
+        std::cout<<"PASS 360 ARC headings: atlas quads clear header; menu preserves every compass vertex\n";
     }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
 }

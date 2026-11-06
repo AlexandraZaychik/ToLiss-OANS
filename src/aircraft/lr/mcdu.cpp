@@ -6,7 +6,7 @@
 namespace oans::lr {
 void FmsAutoCapture::update_phase(double now,int phase) {
     phase_=phase>=1&&phase<=10?phase:0;
-    next_phase_=now+(phase_>=8?60:phase_>=5?30:5);
+    next_phase_=now+3;
 }
 bool FmsAutoCapture::request_due(double now,bool usable,bool busy) {
     if(!capture_allowed()||!usable||busy||now<next_attempt_)return false;

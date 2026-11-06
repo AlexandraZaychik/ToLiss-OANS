@@ -37,7 +37,7 @@ def parse(text: str) -> list[Entry]:
         action = int(action_text)
         if key in seen or parent not in seen or (parent != "root" and seen[parent].action):
             raise ValueError(f"菜单 ID 重复或父菜单无效：{key}")
-        if action and (action in actions or not 1 <= action <= 30):
+        if action and (action in actions or not 1 <= action <= 32):
             raise ValueError(f"菜单动作 ID 重复或无效：{action}")
         entry = Entry(key, parent, json.loads(label), action)
         seen[key] = entry

@@ -266,6 +266,19 @@ void test_surface_name() {
     a.stands.push_back({{300,100},90,"new ramp 27",'C'});
     a.nodes={{1,{0,100}},{2,{1000,100}},{3,{0,150}},{4,{1000,150}}};
     a.edges={{1,2,false,false,"A"},{3,4,false,false,"B"},{1,99,false,false,"BAD"}};
+    check(runway_at(a,{500,0},90)==&a.runways[0],"ownship matches physical runway geometry");
+    check(runway_at(a,{500,0},270)==&a.runways[0],"opposite landing direction matches same physical runway");
+    check(!runway_at(a,{500,20.01},90)&&!runway_at(a,{-1,0},90),"nearby taxiway and runway extension do not count as a landing runway");
+    check(!runway_at(a,{NAN,0},90)&&!runway_at(a,{0,0},NAN),"invalid ownship cannot identify a landing runway");
+    {
+        Airport crossing;
+        crossing.runways={{"18","36",{500,-1500},{500,1500},45},
+                          {"09","27",{0,0},{2400,0},45},
+                          {"10","28",{0,100},{3500,100},45}};
+        check(runway_at(crossing,{500,0},90)==&crossing.runways[1],"crossing landing selects aligned short runway instead of longest runway");
+        check(runway_at(crossing,{500,0},180)==&crossing.runways[0],"crossing landing follows north-south heading");
+        check(runway_at(crossing,{500,100},270)==&crossing.runways[2],"parallel landing selects occupied runway instead of adjacent short runway");
+    }
     check(surface_name(a,{500,0},90)=="09","runway end follows aircraft heading");
     check(surface_name(a,{500,0},270)=="27","reciprocal runway end");
     check(surface_name(a,{500,20},90)=="09","physical runway edge included");

@@ -7,10 +7,11 @@ namespace oans {
 // anchor and radius; picking and dragging use this identical projection.
 struct MapViewport {Vec2 anchor;double radius,bottom;};
 inline MapViewport map_viewport(int mode,bool panel,double height=202) {
-    if(panel&&height==110)return mode==3?MapViewport{{300,160},370,112}:MapViewport{{300,330},210,112};
-    if(panel&&height==150)return mode==3?MapViewport{{300,200},330,152}:MapViewport{{300,350},190,152};
-    if(panel)return mode==3?MapViewport{{300,244},290,204}:MapViewport{{300,376},164,204};
-    return mode==3?MapViewport{{300,145},370,40}:MapViewport{{300,285},245,40};
+    // Panels occlude the map; they must not move or rescale its projection.
+    // ARC labels sit outside the ring. Reserve 52 pixels below the header
+    // (y=552) for the large rotated captions, including their atlas padding.
+    const double bottom=panel?height+2:40;
+    return mode==3?MapViewport{{300,160},340,bottom}:MapViewport{{300,285},245,bottom};
 }
 struct MapProjection {
     Vec2 center,anchor{300,285};double scale=1,angle=0,radius=245,bottom=40;

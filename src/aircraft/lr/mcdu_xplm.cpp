@@ -28,12 +28,13 @@ McduScreen McduFmsPort::read_init(int unit) const {
     }
     return mcdu_screen(rows);
 }
-void McduFmsPort::capture_init(double now,bool usable) {
+void McduFmsPort::tick_direct(double now,bool usable) {
+    // Run after the aircraft handles the key, independently of MCDU2 automation.
     for(int unit:{1,2}) {
         auto& request=init_reads_[unit-1];
         if(!request.fields)continue;
         if(!usable) {request={};continue;}
-        if(now<request.due)continue;
+        if(now<request.due||(!request.retry&&static_cast<unsigned>(XPLMGetCycleNumber())-request.trigger_cycle<10u))continue;
         refresh_phase(now);
         const auto screen=read_init(unit);
         const bool blocked=screen.contains("TMPY")||screen.contains("TEMPY");
@@ -94,6 +95,7 @@ int McduFmsPort::activity(XPLMCommandRef command,XPLMCommandPhase phase,void* pt
             if(init_field) {
                 auto& request=p.init_reads_[key.unit-1];
                 request.fields|=init_field;request.retry=0;request.due=XPLMGetElapsedTime();
+                request.trigger_cycle=static_cast<unsigned>(XPLMGetCycleNumber());
             }
         }
         if(p.sampler.busy()) {
@@ -162,8 +164,6 @@ void McduFmsPort::refresh_phase(double now) {
 }
 void McduFmsPort::tick(double now,bool usable) {
     OANS_TRACE_SCOPE();
-    // The key observer runs before the aircraft command handler. Read on the
-    // next flight loop, after that handler, with no crew-idle delay or page keys.
     if(repeat_fpln_) {
         refresh_phase(now);
         if(!usable||(!sampler.crew_triggered()&&!automatic.capture_allowed())) {
@@ -181,7 +181,6 @@ void McduFmsPort::tick(double now,bool usable) {
             return;
         }
     }
-    capture_init(now,usable);
     if(!ready())return;
     if(automatic.phase_due(now)||sampler.wants_screen(now))refresh_phase(now);
     if(!automatic.capture_allowed())sampler.stop_automatic_capture();

@@ -13,6 +13,8 @@ public:
     virtual bool uses_mcdu_sampling_setting() const {return true;}
     virtual bool bind()=0;
     virtual void bind_activity()=0;
+    // Crew-triggered reads of the visible page do not use the automation switch.
+    virtual void tick_direct(double,bool) {}
     virtual void tick(double now,bool usable)=0;
     virtual void clear(bool restore)=0;
     virtual void reset_tracking()=0;
@@ -35,6 +37,7 @@ public:
     }
     bool bind() {return source_&&source_->bind();}
     void bind_activity() {if(source_)source_->bind_activity();}
+    void tick_direct(double now,bool usable) {if(source_)source_->tick_direct(now,usable);}
     void tick(double now,bool usable) {if(source_)source_->tick(now,usable);}
     void clear(bool restore) {if(source_)source_->clear(restore);}
     void reset_tracking() {if(source_)source_->reset_tracking();}

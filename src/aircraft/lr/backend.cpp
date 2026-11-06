@@ -48,6 +48,7 @@ const double* uv(const DataAccess&,int side,bool pfd) {
 const aircraft::Backend& backend() {
     static const aircraft::Backend value{
         "lr","Laminar Research",{
+            {"plan_phase","laminar/A333/data/flight_phase"},
             {"range0","sim/cockpit2/EFIS/map_range_nm"},{"range1","sim/cockpit2/EFIS/map_range_nm_copilot"},
             {"mode0","laminar/A333/knobs/EFIS_mode_pos_capt"},{"mode1","laminar/A333/knobs/EFIS_mode_pos_fo"},
             {"bright","sim/cockpit2/switches/instrument_brightness_ratio"},

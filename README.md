@@ -67,6 +67,6 @@ CHOXON 2 CHOXOFF、heart4sck、KILO_333167、ricardo404
 ~ lr330 support
 
 20261104-1123Z update\
-~ zibo737 support
-~ small improve
+~ zibo737 support\
+~ small improve\
 ~ route highlight

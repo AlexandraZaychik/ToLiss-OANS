@@ -16,6 +16,7 @@ void tests() {
         UiModel m;const auto original=nd_controls(s,m);m.bottom_inset=32;
         const auto lifted=nd_controls(s,m);
         check(original.controls.size()==lifted.controls.size(),"status row retains panel controls");
+        check(!lifted.hit({180,19}),"status row outside arrow cannot activate a hidden control");
         for(size_t i=0;i<original.controls.size();++i) {
             const auto& a=original.controls[i];const auto& b=lifted.controls[i];
             if(a.action==UiAction::panel_toggle) {
@@ -27,7 +28,6 @@ void tests() {
                 continue;
             }
             check(b.box.b==a.box.b+32&&b.box.t==a.box.t+32&&b.box.l==a.box.l,"controls lifted above status row");
-            check(!lifted.hit({180,19}),"status row outside arrow cannot activate a hidden control");
             const Vec2 point{(b.box.l+b.box.r)*.5,(b.box.b+b.box.t)*.5};
             const auto* before=original.hit({point.x,point.y-32});const auto* after=lifted.hit(point);
             check(before&&after&&before->action==after->action,"lifted control picking matches displayed action");
@@ -67,11 +67,16 @@ void tests() {
             check(scroll_nd_dropdown(city,city_model,{350,40},-1,1)==(mode==2),"CITY extension uses matching accelerated wheel region");
         }
     }
-    for(int mode:{2,3,4}) {
-        const auto viewport=map_viewport(mode,true,110);
-        check(viewport.bottom==112&&viewport.anchor.y>viewport.bottom+20&&viewport.anchor.y+viewport.radius<552,"status uses compact viewport above its panel");
+    // Menu visibility changes occlusion only, including the legacy panel sizes.
+    for(int mode:{2,3,4})for(double height:{110.,150.,202.}) {
+        const auto closed=map_viewport(mode,false,height),open=map_viewport(mode,true,height);
+        check(length(closed.anchor-open.anchor)==0&&closed.radius==open.radius,
+              "opening any panel preserves map position and scale");
+        check(open.bottom==height+2&&closed.bottom==40,"panel occlusion tracks its height");
+        if(mode==3)check(open.anchor.y+open.radius+52<=552,
+                        "ARC reserves space for complete rotated heading labels below header");
     }
-    // All three reference panels now share the same compact viewport.
+    // All three reference panels share the same projection.
     for(int mode:{2,3,4}) {
         auto viewport=map_viewport(mode,true,panel_height(Panel::map_data));
         check(viewport.anchor.y>panel_height(Panel::map_data)+20,"open panel leaves centred feature visible");

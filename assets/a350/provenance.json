@@ -83,6 +83,10 @@
           "after": "runway = 0xFFC8C8C8"
         },
         {
+          "before": "-- eigenes Flugzeug wie im OANS: magentafarbenes Kreuz (Rumpf, Flaechen, Leitwerk) mit dunklem Rand\nlocal function draw_plane(px, py, th, col, k)\n    k = k or 1\n    local fx, fy = math.sin(th) * k, -math.cos(th) * k\n    local rx, ry = math.cos(th) * k, math.sin(th) * k\n    for pass = 1, 2 do\n        local c, w = (pass == 1) and 0xFF000000 or col, ((pass == 1) and 7 or 4) * k\n        DL.line(px + fx * 16, py + fy * 16, px - fx * 20, py - fy * 20, c, w)\n        DL.line(px + fx * 3 - rx * 17, py + fy * 3 - ry * 17, px + fx * 3 + rx * 17, py + fy * 3 + ry * 17, c, w)\n        DL.line(px - fx * 15 - rx * 7, py - fy * 15 - ry * 7, px - fx * 15 + rx * 7, py - fy * 15 + ry * 7, c, w)\n    end\nend",
+          "after": "-- Angular aircraft cross: flat nose, square wingtips and narrow tailplane.\nlocal function draw_plane(px, py, th, col, k)\n    k = k or 1\n    local fx, fy = math.sin(th) * k, -math.cos(th) * k\n    local rx, ry = math.cos(th) * k, math.sin(th) * k\n    local function bar(x0, y0, x1, y1, c)\n        DL.quadf(px+rx*x0+fx*y0, py+ry*x0+fy*y0,\n                 px+rx*x1+fx*y0, py+ry*x1+fy*y0,\n                 px+rx*x1+fx*y1, py+ry*x1+fy*y1,\n                 px+rx*x0+fx*y1, py+ry*x0+fy*y1, c)\n    end\n    for pass = 1, 2 do\n        local c = (pass == 1) and 0xFF000000 or col\n        local edge = (pass == 1) and 1.5 or 0\n        bar(-1.5-edge, -20-edge, 1.5+edge, 16+edge, c)\n        bar(-17-edge, 1.5-edge, 17+edge, 4.5+edge, c)\n        bar(-6-edge, -16.5-edge, 6+edge, -13.5+edge, c)\n    end\nend"
+        },
+        {
           "before": "    local v, c, t, i = GLB.v, GLB.c, GLB.t, 2 * n\n    v[i], v[i + 1], v[i + 2], v[i + 3], v[i + 4], v[i + 5] = ax, ay, bx, by, cx, cy\n    local wu, wv = GLB.wu, GLB.wv\n    t[i], t[i + 1], t[i + 2], t[i + 3], t[i + 4], t[i + 5] = wu, wv, wu, wv, wu, wv\n    c[n], c[n + 1], c[n + 2] = col, col, col",
           "after": "    native_draw_tri(ax, ay, bx, by, cx, cy, col, GLB.wu, GLB.wv)"
         },

@@ -32,6 +32,7 @@
 #include "dsf_buildings.hpp"
 #include "map_viewport.hpp"
 #include "fms_source.hpp"
+#include "plan_airport.hpp"
 #include "runway_ahead.hpp"
 #include <algorithm>
 #include <cmath>
@@ -52,7 +53,7 @@
 
 using namespace oans;
 namespace {
-constexpr const char* version="0.4.43";
+constexpr const char* version="0.4.44";
 constexpr float white[3]={1,1,1},cyan[3]={.20f,.90f,1},green[3]={0,1,0},amber[3]={1,.65f,0};
 constexpr float taxi_yellow[3]={.95f,.83f,0},magenta[3]={1,.35f,1};
 AtlasFont map_font;
@@ -163,7 +164,7 @@ const aircraft::Bindings simulator_names={
     {"icao","sim/aircraft/view/acf_ICAO"},
 };
 const char* cursor_settings[]={"pink_vertical","pink_horizontal","yellow_vertical","yellow_horizontal"};
-struct Config {bool nd=true,test=false,fms=true,simple_stand_names=true,status_bar=false,adsb_in=false;int cursor_style=0;};
+struct Config {bool nd=true,test=false,fms=false,simple_stand_names=true,status_bar=false,adsb_in=false,close_when_takeoff=false;int cursor_style=0;};
 std::string current_surface;
 double surface_sample_at=0;
 SurfaceTracker surface_tracker;
@@ -171,8 +172,16 @@ Config config;
 double status_bar_height() {return config.status_bar&&!config.test?stus_bar_height:0;}
 FmsPort fms_port;
 const aircraft::Backend* aircraft_backend=nullptr;
+bool plan_airport_supported() {
+    return aircraft_backend&&(std::strcmp(aircraft_backend->id,"toliss")==0||
+        std::strcmp(aircraft_backend->id,"lr")==0);
+}
 const aircraft::DataAccess aircraft_data{value,[](const std::string& key,int i){return dr(key).numeric(i);}};
-int nd_mode(int side) {return aircraft_backend?aircraft_backend->nd_mode(aircraft_data,side):-1;}
+bool oans_arc[2]={false,false};
+int nd_mode(int side) {
+    if(side>=0&&side<2&&oans_arc[side])return 3; // OANS projection only; never move the aircraft selector.
+    return aircraft_backend?aircraft_backend->nd_mode(aircraft_data,side):-1;
+}
 
 RunwayAhead runway_advisory;
 struct AdvisoryTest {
@@ -189,6 +198,9 @@ unsigned fms_generation_seen=0;
 bool enabled=false,profile_ok=false,aircraft_ok=false,nd_on[2]={false,false},manual_airport=false;
 bool aircraft_probe_complete=false,aircraft_report_pending=false;
 bool airport_position_pending=true,first_oans_open=true;
+bool airborne_open_pending=false,airborne_open_locked=false;
+PlanAirportSelection plan_airport_selection;
+bool last_plan_context=false;
 double bind_at=0,model_check_at=0,choose_at=0,heartbeat=0,traffic_sample_at=0;
 std::string status="INITIALIZING";
 UiState views[3]; // captain, first officer, diagnostic popup
@@ -211,7 +223,7 @@ std::string route_window_title;
 std::string route_pending_icao,route_pending_query;
 XPLMMenuID menu=nullptr;int menu_item=-1;
 struct MenuBinding {XPLMMenuID menu=nullptr;int index=-1;};
-std::array<MenuBinding,31> menu_bindings{};
+std::array<MenuBinding,33> menu_bindings{};
 std::vector<XPLMMenuID> submenus;
 void check_menu_action(int action,bool checked) {
     const auto& binding=menu_bindings.at(action);
@@ -385,7 +397,7 @@ std::string form_encode(const std::string& input) {
 #ifdef _WIN32
 std::string post_overpass(const char* host,const std::string& body) {
     const std::wstring wide_host(host,host+std::strlen(host));
-    WinHttpHandle session{WinHttpOpen(L"ToLissOANS/0.4.43 airport-map",WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+    WinHttpHandle session{WinHttpOpen(L"ToLissOANS/0.4.44 airport-map",WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
                                       WINHTTP_NO_PROXY_NAME,WINHTTP_NO_PROXY_BYPASS,0)};
     if(!session.value)throw std::runtime_error(winhttp_error("WinHttpOpen"));
     if(!WinHttpSetTimeouts(session.value,10000,10000,20000,45000))
@@ -646,6 +658,7 @@ void read_config() {
         if(key=="stand_name")config.simple_stand_names=v.find("complex")==std::string::npos;
         if(key=="stus_bar")config.status_bar=yes;
         if(key=="adsb_in")config.adsb_in=yes;
+        if(key=="close_when_takeoff")config.close_when_takeoff=yes;
         if(key=="cursor") {
             v.erase(std::remove_if(v.begin(),v.end(),[](unsigned char c){return std::isspace(c);}),v.end());
             for(int i=0;i<4;++i)if(v==cursor_settings[i])config.cursor_style=i;
@@ -660,7 +673,9 @@ void read_config() {
     update_cursor_menu();
     check_menu_action(22,config.status_bar);
     check_menu_action(28,config.fms);
+    check_menu_action(31,!config.fms);
     check_menu_action(29,config.adsb_in);
+    check_menu_action(32,config.close_when_takeoff);
     traffic_sample_at=0;if(!config.adsb_in)traffic_targets.clear();
     current_surface.clear();
     surface_sample_at=0;
@@ -694,6 +709,8 @@ void diagnostics() {
     f<<"OANS_POSITION ready="<<aircraft_position_ready()<<" pending="<<airport_position_pending
      <<" first_open="<<first_oans_open<<" manual="<<manual_airport
      <<" airport="<<(airport?airport->icao:"NONE")<<" requested="<<last_requested<<'\n';
+    f<<"OANS_PLAN last_consulted="<<plan_airport_selection.last_consulted()
+     <<" phase="<<value("plan_phase",0,-1)<<" active="<<last_plan_context<<'\n';
     f<<"OANS_STUS_BAR enabled="<<config.status_bar<<" surface="<<current_surface<<'\n';
     f<<"OANS_EMPTY_MAP message="<<(airport?"NONE":airport_map_loading?"PLEASE WAIT":"ARPT NAV NOT AVAIL")<<'\n';
     if(aircraft_backend)aircraft_backend->diagnostics(f,aircraft_data);
@@ -770,7 +787,8 @@ void diagnostics() {
         <<" feature_kind="<<views[i].feature_kind<<" feature_selection="<<views[i].feature_selection<<" feature_first="<<views[i].feature_first
         <<" feature_dropdown="<<views[i].feature_dropdown<<" feature_initial_dropdown="<<views[i].feature_initial_dropdown
         <<" confirmed_airport="<<(views[i].confirmed_airport?views[i].confirmed_airport->icao:"NONE")<<" airport_modifying="<<views[i].airport_modifying
-        <<" not_in_plan="<<(airport&&airport_outside_active_plan(fms_port.plan(),airport->icao))<<'\n';
+        <<" not_in_plan="<<(airport&&airport_outside_active_plan(fms_port.plan(),airport->icao))
+        <<" oans_mode="<<(i<2?nd_mode(i):4)<<'\n';
     aircraft_report_pending=false;
     log("Interface report saved: "+(plugin_dir/"interfaces.txt").u8string());
 }
@@ -863,7 +881,10 @@ void open_panel(int id,Panel panel) {
     }
     log("ND UI view="+std::to_string(id)+" panel="+std::to_string(static_cast<int>(panel)));
 }
+bool landing_airport_pending=false,landing_airport_locked=false;
 void nearest_airport() {
+    airborne_open_pending=false;airborne_open_locked=false;
+    landing_airport_locked=false;landing_airport_pending=false;
     route_pending_icao.clear();route_pending_query.clear();
     release_input();status="NEAREST AIRPORT MODE";manual_airport=false;airport.reset();a350_map.reset();
     runway_index=-1;choose_at=0;airport_position_pending=true;
@@ -887,14 +908,86 @@ void confirm_first_oans_position() {
     if(!manual_airport&&!advisory_test.active&&!advisory_test.pending)nearest_airport();
 }
 void toggle_nd(int side) {
+    const bool opening=!nd_on[side]&&!nd_on[1-side];
     nd_on[side]=!nd_on[side];
-    if(nd_on[side])confirm_first_oans_position();
+    if(!nd_on[side])oans_arc[side]=false;
+    if(nd_on[side]) {
+        confirm_first_oans_position();
+        const double phase=value("plan_phase",0,-1);
+        const bool plan=plan_airport_supported()&&(nd_mode(0)==4||nd_mode(1)==4||
+            (window&&XPLMGetWindowIsVisible(window)));
+        if(opening&&!plan&&plan_airport_supported()&&dr("plan_phase").numeric()&&
+           std::isfinite(phase)&&phase>=5&&phase<=10&&std::floor(phase)==phase&&
+           !manual_airport&&!advisory_test.active&&!advisory_test.pending) {
+            nearest_airport();airborne_open_pending=true;
+        }
+    }
+}
+int oans_ecam_phase=0;
+void update_ecam_oans() {
+    const bool toliss=aircraft_backend&&std::strcmp(aircraft_backend->id,"toliss")==0;
+    const bool lr=aircraft_backend&&std::strcmp(aircraft_backend->id,"lr")==0;
+    if(!aircraft_ok||(!toliss&&!lr)) {
+        oans_ecam_phase=0;landing_airport_pending=false;landing_airport_locked=false;return;
+    }
+    const auto ref=XPLMFindDataRef(lr?"laminar/A333/data/flight_phase":"AirbusFBW/ECAMFlightPhase");
+    const int type=ref?XPLMGetDataRefTypes(ref):0;
+    const double raw_phase=type&xplmType_Double?XPLMGetDatad(ref):
+        type&xplmType_Float?XPLMGetDataf(ref):type&xplmType_Int?XPLMGetDatai(ref):0;
+    const int phase=std::isfinite(raw_phase)&&raw_phase>=1&&raw_phase<=10&&std::floor(raw_phase)==raw_phase?
+        static_cast<int>(raw_phase):0;
+    const bool landing=oans_ecam_phase==7&&phase==8;
+    const bool takeoff=oans_ecam_phase==4&&phase==5;
+    oans_ecam_phase=phase;
+    if(takeoff) {landing_airport_locked=false;landing_airport_pending=false;}
+    if(takeoff&&config.close_when_takeoff) {
+        release_input();
+        nd_on[0]=nd_on[1]=false;
+        oans_arc[0]=oans_arc[1]=false;
+        log("ECAM 4->5: auto OANS OFF (both sides)");
+    }
+    if(!landing)return;
+    double landing_range=2;
+    std::string landing_runway="UNKNOWN (fallback 2 NM)";
+    if(aircraft_position_ready()&&dr("psi").numeric()&&std::isfinite(value("psi"))) {
+        // Ownship geometry, never the FMS arrival runway, selected map runway,
+        // test advisory or airport's longest runway. The displayed airport is
+        // only a fallback when its physical rectangle actually contains us.
+        for(const auto* a:{advisory_airport.get(),airport.get()})if(a) {
+            const auto position=local(value("lat"),value("lon"),a->lat,a->lon);
+            if(const auto* r=runway_at(*a,position,value("psi"))) {
+                const auto size=r->length();
+                landing_range=size<=2500?1:2;
+                landing_runway=a->icao+" "+r->name+"/"+r->reciprocal+" length_m="+std::to_string(size);
+                break;
+            }
+        }
+    }
+    log("ECAM 7->8: actual landing runway="+landing_runway);
+    for(int side=0;side<2;++side)if(!nd_on[side]) {
+        // Both Airbus overlays require physical 10 NM; OANS uses its own scale.
+        const auto range=dr("range"+std::to_string(side));
+        auto set_int=[](const Ref& r,int v) {
+            if(!r.id||!r.writable)return;
+            if(r.type&xplmType_Int)XPLMSetDatai(r.id,v);
+            else if(r.type&xplmType_Float)XPLMSetDataf(r.id,static_cast<float>(v));
+            else if(r.type&xplmType_Double)XPLMSetDatad(r.id,v);
+        };
+        // ToLiss range uses a selector index; LR's binding is the NM value.
+        set_int(range,lr?10:0);
+        toggle_nd(side);
+        oans_arc[side]=true;
+        views[side].range_nm=landing_range;views[side].follow=true;views[side].orientation=-1;
+        log("ECAM 7->8: auto OANS side="+std::to_string(side)+" range="+std::to_string(static_cast<int>(landing_range))+" NM mode=ARC");
+    }
+    landing_airport_pending=true;
 }
 void display_airport(int id) {
     auto& s=views[id];
     if(s.selection<0||s.selection>=static_cast<int>(s.results.size())) {status="SELECT AIRPORT FROM RESULTS";return;}
     // The result carries the canonical 1302 identity and its original source offset.
     const auto entry=s.results[s.selection];confirm_airport_candidate(s);release_input();status="AIRPORT CHANGED";
+    landing_airport_pending=false;landing_airport_locked=false;
     manual_airport=true;airport_position_pending=false;request_airport(entry);status="LOADING "+entry.icao;
     s.menu=false;
     s.initial_dropdown=s.airport_dropdown=false;
@@ -1047,7 +1140,8 @@ MapTransform transform(int id) {
         Vec2 ac=local(value("lat"),value("lon"),airport->lat,airport->lon);
         // Follow ownship across the airport, irrespective of distance from
         // the first runway endpoint used as the local coordinate origin.
-        if(aircraft_position_ready(id<2?id:-1)&&(mode!=4||!manual_airport||length(ac)<60000))m.center=ac;
+        if(aircraft_position_ready(id<2?id:-1)&&
+           (mode!=4||(!manual_airport&&!plan_airport_supported())||length(ac)<60000))m.center=ac;
         else if(runway_index>=0) {const auto& r=airport->runways[runway_index];m.center=(r.start+r.end)*.5;}
     }
     if(!view.follow)m.center=view.center;
@@ -1411,7 +1505,14 @@ const char* nd_overlay_blocked(int side) {
     if(!enabled)return "PLUGIN DISABLED";
     if(!aircraft_ok||!profile_ok)return "AIRCRAFT PROFILE UNAVAILABLE";
     if(!config.nd)return "ND DISABLED IN CONFIG";
-    return aircraft_backend->overlay_blocked(aircraft_data,side,config.test);
+    // Use the OANS projection for mode gating when it has its own ARC view.
+    // Power, brightness, physical range and display-switch gates stay with the aircraft.
+    const aircraft::DataAccess overlay_data{
+        [side](const std::string& key,int index,double fallback) {
+            if(oans_arc[side]&&key=="mode"+std::to_string(side))return 3.0;
+            return aircraft_data.value(key,index,fallback);
+        },aircraft_data.numeric};
+    return aircraft_backend->overlay_blocked(overlay_data,side,config.test);
 }
 const char* nd_blocked(int side) {
     const char* blocked=nd_overlay_blocked(side);
@@ -2207,23 +2308,29 @@ void menu_action(void*,void* item) {
         case 19:toggle_test_window();break;
         case 30:open_route_plan();break;
         case 23:if(about_window) {XPLMSetWindowIsVisible(about_window,1);XPLMTakeKeyboardFocus(about_window);}break;
-        case 20:case 21:case 22:case 24:case 25:case 26:case 27:case 28:case 29: {
+        case 20:case 21:case 22:case 24:case 25:case 26:case 27:case 28:case 29:case 31:case 32: {
             release_input();
             const bool bar=action==22;
             const bool cursor=action>=24&&action<=27;
-            const bool mcdu2=action==28;
+            const bool mcdu2=action==28||action==31;
             const bool adsb=action==29;
-            if(adsb) {
+            const bool takeoff=action==32;
+            if(takeoff) {
+                config.close_when_takeoff=!config.close_when_takeoff;
+                check_menu_action(32,config.close_when_takeoff);
+                log(config.close_when_takeoff?"Close oans when TO ON":"Close oans when TO OFF");
+            } else if(adsb) {
                 config.adsb_in=!config.adsb_in;traffic_sample_at=0;
                 if(!config.adsb_in)traffic_targets.clear();
                 check_menu_action(29,config.adsb_in);
                 log(config.adsb_in?"ADS-B IN ON":"ADS-B IN OFF");
             } else if(mcdu2) {
-                config.fms=!config.fms;
+                config.fms=action==28;
                 if(fms_port.uses_mcdu_sampling_setting()) {
                     fms_port.clear(true);fms_bind_at=0;fms_generation_seen=0;choose_at=0;
                 }
                 check_menu_action(28,config.fms);
+                check_menu_action(31,!config.fms);
                 log(config.fms?"Auto info from MCDU2 ON":"Auto info from MCDU2 OFF");
             } else if(cursor) {config.cursor_style=static_cast<int>(action-24);update_cursor_menu();}
             else if(bar) {
@@ -2233,7 +2340,7 @@ void menu_action(void*,void* item) {
             current_surface.clear();
             surface_sample_at=0;
             surface_tracker.reset();
-            const std::string setting=adsb?"adsb_in":mcdu2?"fms_mcdu2_sampling":cursor?"cursor":bar?"stus_bar":"stand_name";
+            const std::string setting=takeoff?"close_when_takeoff":adsb?"adsb_in":mcdu2?"fms_mcdu2_sampling":cursor?"cursor":bar?"stus_bar":"stand_name";
             std::ifstream in(plugin_dir/"config.ini");std::string line,contents;
             while(std::getline(in,line)) {
                 auto key=line.substr(0,line.find('='));
@@ -2242,7 +2349,7 @@ void menu_action(void*,void* item) {
             }
             in.close();
             std::ofstream out(plugin_dir/"config.ini");
-            out<<contents<<setting<<'='<<(adsb?(config.adsb_in?"1":"0"):mcdu2?(config.fms?"1":"0"):cursor?cursor_settings[config.cursor_style]:bar?(config.status_bar?"1":"0"):(config.simple_stand_names?"simple":"complex"))<<"\n";
+            out<<contents<<setting<<'='<<(takeoff?(config.close_when_takeoff?"1":"0"):adsb?(config.adsb_in?"1":"0"):mcdu2?(config.fms?"1":"0"):cursor?cursor_settings[config.cursor_style]:bar?(config.status_bar?"1":"0"):(config.simple_stand_names?"simple":"complex"))<<"\n";
             if(!out)log("Could not save "+setting+" setting");
             break;
         }
@@ -2280,7 +2387,7 @@ void create_ui() {
     if(route_window){update_route_title();XPLMSetWindowResizingLimits(route_window,640,200,640,200);}
     menu_item=XPLMAppendMenuItem(XPLMFindPluginsMenu(),"ToLiss OANS",nullptr,0);
     menu=XPLMCreateMenu("ToLiss OANS",XPLMFindPluginsMenu(),menu_item,menu_action,nullptr);
-    const char* labels[]={"Open Airport Map Window","Toggle captain ND map","Toggle FO ND map","Toggle ND calibration pattern","Write interface / click report","Reload config and aircraft profile","","Return to nearest airport",
+    const char* labels[]={"Popup OANS","Toggle captain ND map","Toggle FO ND map","Toggle ND calibration pattern","Write interface / click report","Reload config and aircraft profile","","Return to nearest airport",
         "Captain ND MAP DATA","FO ND MAP DATA","Captain ND ARPT SEL","FO ND ARPT SEL","Captain OANS zoom in","Captain OANS zoom out","FO OANS zoom in","FO OANS zoom out","Captain center on aircraft","FO center on aircraft"};
     const char* paths[]={"toliss_oans/window","toliss_oans/capt_nd","toliss_oans/fo_nd","toliss_oans/test_pattern","toliss_oans/diagnostics","toliss_oans/reload","","toliss_oans/nearest",
         "toliss_oans/capt_panel","toliss_oans/fo_panel","toliss_oans/capt_airport","toliss_oans/fo_airport","toliss_oans/capt_range_in","toliss_oans/capt_range_out","toliss_oans/fo_range_in","toliss_oans/fo_range_out","toliss_oans/capt_center","toliss_oans/fo_center"};
@@ -2310,7 +2417,9 @@ void create_ui() {
     update_cursor_menu();
     check_menu_action(22,config.status_bar);
     check_menu_action(28,config.fms);
+    check_menu_action(31,!config.fms);
     check_menu_action(29,config.adsb_in);
+    check_menu_action(32,config.close_when_takeoff);
 }
 float tick(float elapsed,float,int,void*) {
     OANS_TRACE_SCOPE();
@@ -2326,16 +2435,36 @@ float tick(float elapsed,float,int,void*) {
             fms_bind_at=heartbeat+5;
             if(fms_port.sampling_enabled(config.fms))fms_port.bind();else fms_port.bind_activity();
         }
-        fms_port.tick(heartbeat,fms_port.sampling_enabled(config.fms)&&aircraft_ok&&aircraft_backend->powered(aircraft_data));
+        const bool fms_usable=aircraft_ok&&aircraft_backend->powered(aircraft_data);
+        // Process deferred crew-edited INIT reads even with automation off.
+        fms_port.tick_direct(heartbeat,fms_usable);
+        if(fms_port.sampling_enabled(config.fms))fms_port.tick(heartbeat,fms_usable);
         if(fms_generation_seen!=fms_port.generation()) {
             fms_generation_seen=fms_port.generation();
             choose_at=0;
         }
         const bool position_ready=aircraft_position_ready();
+        // Airports are shared by the existing three views. PLAN's default is
+        // active when either physical selector is PLAN or the PLAN popup is open.
+        const bool plan_context=plan_airport_supported()&&(nd_mode(0)==4||nd_mode(1)==4||
+            (window&&XPLMGetWindowIsVisible(window)));
+        if(plan_context!=last_plan_context) {last_plan_context=plan_context;choose_at=0;}
+        if(plan_context)airborne_open_locked=false;
+        const bool airborne=dr("ground").numeric(2)&&value("ground",0)==0&&
+            value("ground",1)==0&&value("ground",2)==0;
+        const bool enroute=airborne&&aircraft_backend&&dr("plan_phase").numeric()&&
+            plan_enroute_phase(aircraft_backend->id,value("plan_phase",0,-1));
         if(!position_ready&&!manual_airport&&!airport_position_pending)nearest_airport();
         if(position_ready&&index_ready&&airport_position_pending&&!manual_airport) {
             std::optional<IndexEntry> nearby;
-            {std::lock_guard<std::mutex> lock(db_mutex);nearby=nearest(airport_index,value("lat"),value("lon"));}
+            {std::lock_guard<std::mutex> lock(db_mutex);
+                if(airborne_open_pending&&!plan_context)nearby=plan_airport_selection.select_airborne_open(
+                    airport_index,fms_port.plan(),value("lat"),value("lon"));
+                else if(plan_context)nearby=plan_airport_selection.select(airport_index,fms_port.plan(),
+                    value("lat"),value("lon"),enroute);
+                if(!nearby&&(!airborne_open_pending||plan_context))nearby=nearest(airport_index,value("lat"),value("lon"));}
+            airborne_open_locked=airborne_open_pending&&!plan_context;
+            airborne_open_pending=false;
             airport_position_pending=false;choose_at=heartbeat+5;
             if(nearby) {request_airport(*nearby);status="LOADING "+nearby->icao;}
             else {airport_map_loading=false;status="ARPT NAV NOT AVAIL";}
@@ -2370,6 +2499,27 @@ float tick(float elapsed,float,int,void*) {
         advisory_input.valid=aircraft_ok&&profile_ok&&dr("lat").numeric()&&dr("lon").numeric()&&dr("speed").numeric()&&
             dr("psi").numeric()&&dr("ground").numeric(2)&&std::isfinite(value("lat"))&&std::isfinite(value("lon"));
         runway_advisory.update(advisory_airport.get(),advisory_input,elapsed);
+        // Consume ready ownship runway geometry before handling touchdown.
+        update_ecam_oans();
+        if(landing_airport_pending&&index_ready) {
+            std::optional<IndexEntry> target;
+            const auto& plan=fms_port.plan();
+            {
+                std::lock_guard<std::mutex> lock(db_mutex);
+                if(plan.observed)target=find_airport(airport_index,plan.destination.airport);
+                if(!target&&position_ready)
+                    target=nearest(airport_index,value("lat"),value("lon"),std::numeric_limits<double>::infinity());
+            }
+            if(target) {
+                landing_airport_pending=false;landing_airport_locked=true;
+                manual_airport=false;airport_position_pending=false;
+                if(target->icao!=last_requested||(!airport&&!airport_map_loading))request_airport(*target);
+                log("ECAM 7->8: auto OANS airport="+target->icao);
+            } else if(position_ready) {
+                landing_airport_pending=false;status="ARPT NAV NOT AVAIL";
+                log("ECAM 7->8: auto OANS airport unavailable");
+            }
+        }
         std::shared_ptr<Airport> loaded;std::shared_ptr<A350Map> loaded_map;std::string err,map_note,map_icao;
         {std::lock_guard<std::mutex> lock(db_mutex);loaded=std::move(pending_airport);loaded_map=std::move(pending_map);
             map_note=std::move(pending_map_note);pending_map_note.clear();
@@ -2389,6 +2539,8 @@ float tick(float elapsed,float,int,void*) {
             airport_map_loading=false;
             clear_route_plan(false);route_message="Airport changed. Apply a route for the current airport.";
             status="AIRPORT LOADED";airport=std::move(loaded);a350_map=std::move(loaded_map);runway_index=-1;
+            if(manual_airport&&!advisory_test.active&&!advisory_test.pending)
+                plan_airport_selection.consult(airport->icao);
             if(!map_note.empty())log(map_note);
             for(auto& s:views) {
                 s.follow=!manual_airport;
@@ -2420,21 +2572,25 @@ float tick(float elapsed,float,int,void*) {
         } else if(!map_note.empty()&&airport&&map_icao==airport->icao&&map_icao==last_requested) {
             log(map_note);
         }
-        if(index_ready&&position_ready&&!airport_position_pending&&heartbeat>choose_at&&!manual_airport&&input_owner<0) {
+        if(index_ready&&position_ready&&!airport_position_pending&&heartbeat>choose_at&&!manual_airport&&!airborne_open_locked&&!landing_airport_locked&&!landing_airport_pending&&input_owner<0) {
             choose_at=heartbeat+5;
             std::optional<IndexEntry> target;
             {std::lock_guard<std::mutex> lock(db_mutex);
                 auto nearby=nearest(airport_index,value("lat"),value("lon"));
                 const auto& p=fms_port.plan();
-                auto dest=p.observed?find_airport(airport_index,p.destination.airport):std::nullopt;
-                const bool airborne=dr("ground").numeric(2)&&value("ground",0)==0&&value("ground",1)==0&&value("ground",2)==0;
-                if(airborne&&dest) {
-                    const bool near_dep=nearby&&nearby->icao!=dest->icao&&
-                        length(local(value("lat"),value("lon"),nearby->lat,nearby->lon))<15000&&
-                        (nearby->icao==p.origin.airport||(airport&&nearby->icao==airport->icao));
-                    if(!near_dep||length(local(value("lat"),value("lon"),dest->lat,dest->lon))<40000)target=dest;
+                if(plan_context) {
+                    target=plan_airport_selection.select(airport_index,p,value("lat"),value("lon"),enroute);
+                    if(!target)target=nearby;
+                } else {
+                    auto dest=p.observed?find_airport(airport_index,p.destination.airport):std::nullopt;
+                    if(airborne&&dest) {
+                        const bool near_dep=nearby&&nearby->icao!=dest->icao&&
+                            length(local(value("lat"),value("lon"),nearby->lat,nearby->lon))<15000&&
+                            (nearby->icao==p.origin.airport||(airport&&nearby->icao==airport->icao));
+                        if(!near_dep||length(local(value("lat"),value("lon"),dest->lat,dest->lon))<40000)target=dest;
+                    }
+                    if(!target&&(!airport||length(local(value("lat"),value("lon"),airport->lat,airport->lon))>60000))target=nearby;
                 }
-                if(!target&&(!airport||length(local(value("lat"),value("lon"),airport->lat,airport->lon))>60000))target=nearby;
             }
             if(target&&target->icao!=last_requested)request_airport(*target);
         }
@@ -2450,6 +2606,7 @@ float tick(float elapsed,float,int,void*) {
     return -1;
 }
 void cleanup() {
+    landing_airport_pending=false;landing_airport_locked=false;oans_ecam_phase=0;
     OANS_TRACE_SCOPE();
     enabled=false;fms_port.clear(true);release_input();finish_worker();
     traffic_targets.clear();
@@ -2556,6 +2713,7 @@ PLUGIN_API void XPluginReceiveMessage(XPLMPluginID from,int message,void* param)
        ((message==XPLM_MSG_PLANE_LOADED||message==XPLM_MSG_PLANE_UNLOADED)&&reinterpret_cast<std::intptr_t>(param)==0)) {
         stop_advisory_test();if(test_window)close_test_window();
         clear_route_plan();if(route_window)close_route_plan();
+        plan_airport_selection.reset();last_plan_context=false;
         nearest_airport();first_oans_open=true;
         runway_advisory.reset();advisory_airport.reset();advisory_choose_at=0;
         {std::lock_guard<std::mutex> lock(db_mutex);
@@ -2565,9 +2723,13 @@ PLUGIN_API void XPluginReceiveMessage(XPLMPluginID from,int message,void* param)
             fms_port.reset_tracking();
     }
     if(message==XPLM_MSG_PLANE_UNLOADED&&reinterpret_cast<std::intptr_t>(param)==0) {
+        oans_ecam_phase=0;
+        oans_arc[0]=oans_arc[1]=false;
         aircraft_ok=false;
     }
     if(message==XPLM_MSG_PLANE_LOADED&&reinterpret_cast<std::intptr_t>(param)==0) {
+        oans_ecam_phase=0;
+        oans_arc[0]=oans_arc[1]=false;
         status="AIRCRAFT RELOADED";bind_refs(false);aircraft_ok=false;bind_at=0;model_check_at=0;
     }
 }

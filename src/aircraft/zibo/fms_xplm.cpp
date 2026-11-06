@@ -84,17 +84,19 @@ void DatarefFmsPort::sample(double now,const std::string& trigger) {
 }
 void DatarefFmsPort::tick(double now,bool usable) {
     if(!usable||!ready()) {pending_=false;read_at_=0;return;}
-    const int current=phase();
-    last_phase_=current;
+    if(now>=next_phase_) {
+        last_phase_=phase();
+        next_phase_=now+3;
+    }
     if(pending_&&now>=read_at_) {pending_=false;sample(now,trigger_);}
 }
 void DatarefFmsPort::clear(bool) {
     for(const auto& c:observed_)XPLMUnregisterCommandHandler(c.first,activity,1,this);
     observed_.clear();endpoints_={};phase_=nullptr;plan_={};status_="NOT SAMPLED";
-    pending_=false;trigger_.clear();read_at_=0;last_read_=-1;last_phase_=-1;generation_=0;
+    pending_=false;trigger_.clear();read_at_=0;last_read_=-1;last_phase_=-1;next_phase_=0;generation_=0;
 }
 void DatarefFmsPort::diagnostics(std::ostream& out,double now,bool enabled) const {
-    out<<"FMS source=ZIBO_DATAREF enabled="<<enabled<<" bound="<<ready()<<" phase="<<phase()
+    out<<"FMS source=ZIBO_DATAREF enabled="<<enabled<<" bound="<<ready()<<" phase="<<last_phase_
        <<" auto_sampling=0 key_delay_s=3 key_observers="<<observed_.size()<<" pending="<<pending_
        <<" observed="<<plan_.observed<<" age="<<(last_read_<0?-1:now-last_read_)<<" generation="<<generation_
        <<" status="<<status_<<"\n"

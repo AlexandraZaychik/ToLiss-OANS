@@ -13,7 +13,7 @@ public:
     void bind_activity() override;
     void tick(double now,bool usable) override;
     void clear(bool restore) override;
-    void reset_tracking() override {pending_=false;read_at_=0;last_phase_=-1;}
+    void reset_tracking() override {pending_=false;read_at_=0;last_phase_=-1;next_phase_=0;}
     bool ready() const override;
     const FmsPlan& plan() const override {return plan_;}
     const std::string& status() const override {return status_;}
@@ -26,7 +26,7 @@ private:
     FmsPlan plan_;
     std::string status_="NOT SAMPLED",trigger_;
     bool pending_=false;
-    double last_read_=-1,read_at_=0;
+    double last_read_=-1,read_at_=0,next_phase_=0;
     int last_phase_=-1;
     unsigned generation_=0;
     int phase() const;

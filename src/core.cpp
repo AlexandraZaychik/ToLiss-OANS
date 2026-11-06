@@ -19,6 +19,20 @@ Vec2 local(double lat,double lon,double lat0,double lon0) {
 double Runway::length() const { return oans::length(end-start); }
 Vec2 Runway::axis() const { const double n=length(); return n>0?(end-start)*(1/n):Vec2{}; }
 Vec2 Runway::station(Vec2 p) const { auto u=axis(), d=p-start; return {dot(d,u),dot(d,{u.y,-u.x})}; }
+const Runway* runway_at(const Airport& a,Vec2 p,double heading) {
+    if(!std::isfinite(p.x)||!std::isfinite(p.y)||!std::isfinite(heading))return nullptr;
+    const double h=heading*pi/180;const Vec2 forward{std::sin(h),std::cos(h)};
+    const Runway* runway=nullptr;double alignment=-1;
+    for(const auto& r:a.runways) {
+        const double size=r.length();
+        if(!std::isfinite(size)||!std::isfinite(r.width)||size<1||r.width<=0)continue;
+        const auto at=r.station(p);
+        if(at.x<0||at.x>size||std::abs(at.y)>r.width*.5)continue;
+        const double match=std::abs(dot(r.axis(),forward));
+        if(match>alignment) {alignment=match;runway=&r;}
+    }
+    return runway;
+}
 namespace {
 enum {surface_none,surface_runway,surface_stand,surface_taxi};
 struct SurfaceMatch {int kind=surface_none;std::string name;};
@@ -30,14 +44,7 @@ std::string surface_label(const std::string& name) {
 SurfaceMatch match_surface(const Airport& a,Vec2 p,double heading,bool simple_stands,const std::string* preferred=nullptr) {
     if(!std::isfinite(p.x)||!std::isfinite(p.y)||!std::isfinite(heading))return {};
     const double h=heading*pi/180;const Vec2 forward{std::sin(h),std::cos(h)};
-    const Runway* runway=nullptr;double alignment=-1;
-    for(const auto& r:a.runways) {
-        if(r.length()<1||r.width<=0)continue;
-        const auto at=r.station(p);
-        if(at.x<0||at.x>r.length()||std::abs(at.y)>r.width*.5)continue;
-        const double match=std::abs(dot(r.axis(),forward));
-        if(match>alignment) {alignment=match;runway=&r;}
-    }
+    const auto* runway=runway_at(a,p,heading);
     if(runway)return {surface_runway,dot(runway->axis(),forward)>=0?runway->name:runway->reciprocal};
     const Stand* stand=nullptr;double best=20;
     for(const auto& s:a.stands)if(!s.name.empty()) {

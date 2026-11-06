@@ -8,6 +8,11 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $testRoot = Join-Path $projectRoot ('build/mock-host'+$(if($BuildFlavor -eq 'Debug'){'-debug'}else{''}))
 $package = Join-Path $testRoot 'ToLissOANS'
+# Own exact extraction/coordinate assertions here; the loader host exercises
+# the generated profile through plugin startup and projected mouse input.
+$profileFixture = Join-Path $testRoot ('profile-generator-' + [guid]::NewGuid().ToString('N'))
+& (Join-Path $projectRoot 'build/aircraft_profile_generator_tests.exe') (Join-Path $AircraftPath 'a320.acf') (Join-Path $projectRoot 'config/toliss') $profileFixture
+if ($LASTEXITCODE -ne 0) { throw 'Aircraft profile extraction tests failed' }
 $fixture = Join-Path $testRoot 'sim\Global Scenery\Global Airports\Earth nav data'
 New-Item -ItemType Directory -Force -Path $testRoot,(Join-Path $package '64'),$fixture | Out-Null
 $cycleFixture=Join-Path $testRoot 'sim\Custom Data'
@@ -42,6 +47,8 @@ I
 1302 datum_lon 120.01
 14 30.0015 120.005 100 0 Tower
 100 45 1 0 0.25 1 1 0 09 30.0 120.0 0 0 0 0 0 0 27 30.0 120.035 0 0 0 0 0 0
+100 45 1 0 0.25 1 1 0 18 29.99 120.005 0 0 0 0 0 0 36 30.0124 120.005 0 0 0 0 0 0
+100 45 1 0 0.25 1 1 0 17 29.99 120.01 0 0 0 0 0 0 35 30.0125 120.01 0 0 0 0 0 0
 1201 30.0 120.02 both 1
 1201 30.001 120.02 both 2
 1202 1 2 twoway taxiway A1
@@ -92,6 +99,10 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Native host compilation failed' }
     & (Join-Path $testRoot 'plugin_host.exe') (Join-Path $testRoot 'XPLM_64.dll') (Join-Path $package '64\win.xpl') (Join-Path $testRoot 'sim') (Join-Path $AircraftPath 'a320.acf') '--test-failure-cleanup'
     if ($LASTEXITCODE -ne 0) { throw 'Native host failure-cleanup regression failed' }
+    Copy-Item -LiteralPath (Join-Path $projectRoot 'config.ini') -Destination $package -Force
+    & (Join-Path $testRoot 'plugin_host.exe') (Join-Path $testRoot 'XPLM_64.dll') (Join-Path $package '64\win.xpl') (Join-Path $testRoot 'sim') (Join-Path $AircraftPath 'a320.acf') '--test-plan-airport'
+    if ($LASTEXITCODE -ne 0) { throw 'Native PLAN airport selection regression failed' }
+    Copy-Item -LiteralPath (Join-Path $projectRoot 'config.ini') -Destination $package -Force
     $dsfCache=Join-Path $buildingCache 'dsf_buildings_ZTEST.json'
     if(Test-Path -LiteralPath $dsfCache){Remove-Item -LiteralPath $dsfCache}
     & (Join-Path $testRoot 'plugin_host.exe') (Join-Path $testRoot 'XPLM_64.dll') (Join-Path $package '64\win.xpl') (Join-Path $testRoot 'sim') (Join-Path $AircraftPath 'a320.acf')

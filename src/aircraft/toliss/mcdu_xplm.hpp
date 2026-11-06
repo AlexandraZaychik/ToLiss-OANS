@@ -16,6 +16,7 @@ public:
     const std::string& major_page(int unit) const {return major_pages_.at(unit-1);}
     void reset_tracking() override {major_pages_={"DATA","DATA"};mcdu2_operated_=false;}
     void tick(double now,bool usable) override;
+    void tick_direct(double now,bool usable) override;
     void clear(bool restore) override;
     bool ready() const override {return !text_.empty();}
     const FmsPlan& plan() const override {return sampler.plan();}
@@ -34,11 +35,10 @@ private:
     unsigned generation_seen_=0;
     unsigned auto_attempts_=0;
     std::string trigger_source_,detection_source_;
-    struct InitRead {unsigned fields=0,retry=0;double due=0;};
+    struct InitRead {unsigned fields=0,retry=0,trigger_cycle=0;double due=0;};
     std::array<InitRead,2> init_reads_{};
     McduScreen read() const;
     McduScreen read_init(int unit) const;
-    void capture_init(double now,bool usable);
     void refresh_phase(double now);
     void send(const std::string& suffix);
     void finish_detection(const std::string& result);

@@ -59,7 +59,18 @@ int main(int argc,char** argv) {
             invoke(action);
             for(int other=24;other<=27;++other)require(is_checked(other)==(other==action),"cursor checkmark exclusivity after reorder");
         }
-        for(int action:{22,28,29}) {
+        require(is_checked(28)&&!is_checked(31),"MCDU full open defaults on");
+        invoke(31);require(!is_checked(28)&&is_checked(31),"MCDU full close is exclusive");
+        invoke(31);require(!is_checked(28)&&is_checked(31),"MCDU full close is idempotent");
+        symbol<void(*)(const char*)>(mock,"MockCommand")("toliss_oans/reload");
+        require(!is_checked(28)&&is_checked(31),"MCDU full close persists after reload");
+        invoke(28);invoke(28);require(is_checked(28)&&!is_checked(31),"MCDU full open is exclusive and idempotent");
+        require(!is_checked(32),"Close oans when TO defaults off");
+        invoke(32);
+        symbol<void(*)(const char*)>(mock,"MockCommand")("toliss_oans/reload");
+        require(is_checked(32),"Close oans when TO enabled state survives reload after reorder");
+        invoke(32);
+        for(int action:{22,29,32}) {
             const bool before=is_checked(action);invoke(action);
             require(is_checked(action)!=before,"toggle checkmark after reorder");invoke(action);
             require(is_checked(action)==before,"toggle restored");
@@ -68,7 +79,7 @@ int main(int argc,char** argv) {
             invoke(action);require(focus()==(action==19?2:action==23?3:4),"window action retains callback");key(27);
         }
         symbol<void(*)(const char*)>(mock,"MockCommand")("toliss_oans/reload");
-        require(is_checked(20)&&is_checked(27),"reload retains checkmarks by action ID");
+        require(is_checked(20)&&is_checked(27)&&is_checked(28)&&!is_checked(31),"reload retains checkmarks by action ID");
         stop();stop=nullptr;
         require(symbol<int(*)()>(mock,"MockResources")()==0,"cleanup releases SDK registrations");
         FreeLibrary(plugin);plugin=nullptr;FreeLibrary(mock);mock=nullptr;
