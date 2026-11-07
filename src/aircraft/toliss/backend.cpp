@@ -69,7 +69,6 @@ bool switched(const DataAccess& d,int side) {
     return d.value("swap"+std::to_string(side),0,0)!=0||d.value("ecamSwap",0,0)!=0;
 }
 const char* overlay_blocked(const DataAccess& d,int side,bool test) {
-    if(!d.numeric("fallback",0))return "DISPLAY RESOLUTION INTERFACE MISSING";
     if(d.value("range"+std::to_string(side),0,99)!=0)return "SET PHYSICAL ND RANGE TO 10";
     const int mode=nd_mode(d,side);
     if(!test&&(mode<2||mode>4))return "SELECT NAV / ARC / PLAN";
@@ -81,14 +80,15 @@ const char* overlay_blocked(const DataAccess& d,int side,bool test) {
     return "";
 }
 bool advisory_available(const DataAccess& d,int side,bool pfd) {
-    if(!d.numeric("fallback",0)||switched(d,side))return false;
+    if(switched(d,side))return false;
     const int mode=nd_mode(d,side);
     if(!pfd&&(mode<2||mode>4))return false;
     const int index=pfd?::profile::current.pfd_brightness[side] : ::profile::current.nd_brightness[side];
     return d.numeric("bright",index)&&brightness(d,side,pfd)>=.01&&powered(d);
 }
 const double* uv(const DataAccess& d,int side,bool pfd) {
-    const int resolution=d.value("fallback",0,0)>.5?1:0;
+    // Older ToLiss providers omit this interface; use the normal layout then.
+    const int resolution=d.numeric("fallback",0)&&d.value("fallback",0,0)>.5?1:0;
     return pfd?::profile::current.pfd_uv[resolution][side] : ::profile::current.nd_uv[resolution][side];
 }
 std::unique_ptr<FmsSource> make_fms() {return std::make_unique<McduFmsPort>();}
