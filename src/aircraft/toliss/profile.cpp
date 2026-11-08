@@ -80,6 +80,46 @@ Source resolve_source(const std::filesystem::path& model) {
     OANS_CONFIG("Profile ID="+source.id+" rule=active ACF stem + ACF MD5[0:4] + OBJ MD5[0:4]");
     return source;
 }
+// Static legacy cockpits mix the six displays with unrelated geometry, or
+// draw each display separately. Only accept unanimated cockpit-textured quads
+// with a full rectangular UV and plausible DU geometry; ambiguity is an error.
+bool screen_quad(const std::vector<Point>& vertices,const std::vector<int>& indices,int first,Screen& result) {
+    std::set<Point> unique;
+    for(int i=first;i<first+6;++i) {
+        require(indices[i]>=0&&static_cast<std::size_t>(indices[i])<vertices.size(),"OBJ vertex index out of bounds");
+        unique.insert(vertices[indices[i]]);
+    }
+    if(unique.size()!=4)return false;
+    std::vector<Point> points(unique.begin(),unique.end());
+    std::sort(points.begin(),points.end(),[](const Point& a,const Point& b){return a[4]!=b[4]?a[4]>b[4]:a[3]<b[3];});
+    result.corners={points[0],points[1],points[3],points[2]};
+    result.uv={1,1,0,0};
+    for(const auto& point:points) {
+        result.uv[0]=std::min(result.uv[0],point[3]);result.uv[1]=std::min(result.uv[1],point[4]);
+        result.uv[2]=std::max(result.uv[2],point[3]);result.uv[3]=std::max(result.uv[3],point[4]);
+    }
+    if(!(result.uv[0]>=0&&result.uv[1]>=0&&result.uv[2]<=1&&result.uv[3]<=1&&result.uv[0]<result.uv[2]&&result.uv[1]<result.uv[3]))return false;
+    for(const auto& point:points)
+        if((point[3]!=result.uv[0]&&point[3]!=result.uv[2])||(point[4]!=result.uv[1]&&point[4]!=result.uv[3]))return false;
+    for(int triangle=0;triangle<2;++triangle) {
+        std::set<Point> corners;
+        for(int i=0;i<3;++i)corners.insert(vertices[indices[first+triangle*3+i]]);
+        if(corners.size()!=3)return false;
+    }
+    return true;
+}
+bool legacy_du(const Screen& screen) {
+    std::array<double,3> lo={screen.corners[0][0],screen.corners[0][1],screen.corners[0][2]};
+    auto hi=lo;
+    for(const auto& p:screen.corners)for(int axis=0;axis<3;++axis){lo[axis]=std::min(lo[axis],p[axis]);hi[axis]=std::max(hi[axis],p[axis]);}
+    const double width=hi[0]-lo[0],height=std::hypot(hi[1]-lo[1],hi[2]-lo[2]);
+    const double u=screen.uv[2]-screen.uv[0],v=screen.uv[3]-screen.uv[1];
+    return width>.1&&width<.6&&height>.1&&height<.6&&width/height>.85&&width/height<1.15&&
+        u>.05&&v>.05&&u/v>.85&&u/v<1.15;
+}
+double center_x(const Screen& screen) {
+    double x=0;for(const auto& p:screen.corners)x+=p[0];return x/4;
+}
 AircraftProfile extract(const Source& source,const std::string& icao) {
     OANS_TRACE_SCOPE();OANS_CONFIG("Generating profile; active ICAO="+icao+" ACF ICAO="+source.property("acf/_ICAO"));
     // Try the shared ToLiss six-screen layout using the active aircraft's geometry.
@@ -95,6 +135,9 @@ AircraftProfile extract(const Source& source,const std::string& icao) {
     std::istringstream obj(text);std::string line;std::vector<Point> vertices;std::vector<int> indices;
     std::vector<std::vector<int>> conditions;
     std::array<std::vector<Screen>,2> displays;
+    std::vector<Screen> static_displays;
+    bool cockpit_texture=false,resolution_condition=false;
+    std::string manipulator;
     while(std::getline(obj,line)) {
         std::istringstream row(line);std::string tag;row>>tag;
         if(tag=="VT") {
@@ -104,12 +147,16 @@ AircraftProfile extract(const Source& source,const std::string& icao) {
         } else if(tag=="IDX"||tag=="IDX10") {
             int index;while(row>>index)indices.push_back(index);
             require(row.eof(),"Invalid OBJ index");
-        } else if(tag=="ANIM_begin")conditions.emplace_back();
+        } else if(tag=="ATTR_cockpit"||tag=="ATTR_cockpit_region"||tag=="ATTR_cockpit_device")cockpit_texture=true;
+        else if(tag=="ATTR_no_cockpit")cockpit_texture=false;
+        else if(tag.rfind("ATTR_manip_",0)==0&&tag!="ATTR_manip_wheel")manipulator=line;
+        else if(tag=="ANIM_begin")conditions.emplace_back();
         else if(tag=="ANIM_end") {require(!conditions.empty(),"Unbalanced OBJ animation");conditions.pop_back();}
         else if(tag=="ANIM_hide"&&!conditions.empty()) {
             double start,end;std::string ref;
             require(bool(row>>start>>end>>ref),"Invalid OBJ hide condition");
             if(ref=="AirbusFBW/DisplayResolutionFallback") {
+                resolution_condition=true;
                 const bool normal=start<=0&&end>=0, fallback=start<=1&&end>=1;
                 require(normal!=fallback,"Unsupported display hide condition");
                 conditions.back().push_back(normal?1:0); // the visible resolution
@@ -117,30 +164,37 @@ AircraftProfile extract(const Source& source,const std::string& icao) {
         } else if(tag=="TRIS") {
             int first,count;require(bool(row>>first>>count),"Invalid OBJ triangle range");
             int mode=-1;for(const auto& block:conditions)for(int visible:block)mode=visible;
-            if(mode<0||count!=36)continue;
-            require(displays[mode].empty(),"Multiple candidate six-screen batches for one resolution");
-            require(first>=0&&static_cast<std::size_t>(first)+36<=indices.size(),"OBJ screen index range out of bounds");
-            for(int screen=0;screen<6;++screen) {
-                std::set<Point> unique;
-                for(int i=first+screen*6;i<first+screen*6+6;++i) {
-                    require(indices[i]>=0&&static_cast<std::size_t>(indices[i])<vertices.size(),"OBJ vertex index out of bounds");
-                    unique.insert(vertices[indices[i]]);
+            require(first>=0&&count>=0&&static_cast<std::size_t>(first)+static_cast<std::size_t>(count)<=indices.size(),"OBJ triangle index range out of bounds");
+            if(mode>=0&&count==36) {
+                require(displays[mode].empty(),"Multiple candidate six-screen batches for one resolution");
+                for(int screen=0;screen<6;++screen) {
+                    Screen result;
+                    require(screen_quad(vertices,indices,first+screen*6,result),"Invalid screen quad/UV rectangle");
+                    displays[mode].push_back(result);
                 }
-                require(unique.size()==4,"Screen must have four distinct corners");
-                std::vector<Point> points(unique.begin(),unique.end());
-                std::sort(points.begin(),points.end(),[](const Point& a,const Point& b){return a[4]!=b[4]?a[4]>b[4]:a[3]<b[3];});
-                Screen result;result.corners={points[0],points[1],points[3],points[2]};
-                result.uv={1,1,0,0};
-                for(const auto& point:points) {
-                    result.uv[0]=std::min(result.uv[0],point[3]);result.uv[1]=std::min(result.uv[1],point[4]);
-                    result.uv[2]=std::max(result.uv[2],point[3]);result.uv[3]=std::max(result.uv[3],point[4]);
+            } else if(mode<0&&conditions.empty()&&cockpit_texture&&
+                      (manipulator.find("ATTR_manip_none")!=std::string::npos||manipulator.find("AirbusFBW/PopUp")!=std::string::npos||manipulator.empty())) {
+                for(int i=first;i+6<=first+count;i+=6) {
+                    Screen result;
+                    if(screen_quad(vertices,indices,i,result)&&legacy_du(result))static_displays.push_back(result);
                 }
-                require(result.uv[0]>=0&&result.uv[1]>=0&&result.uv[2]<=1&&result.uv[3]<=1&&result.uv[0]<result.uv[2]&&result.uv[1]<result.uv[3],"Invalid screen UV rectangle");
-                displays[mode].push_back(result);
             }
         }
     }
     require(conditions.empty(),"Unbalanced OBJ animation at end of file");
+    const bool legacy=!resolution_condition&&displays[0].empty()&&displays[1].empty();
+    if(legacy) {
+        require(static_displays.size()==6,"Expected exactly six unanimated legacy display quads; found "+std::to_string(static_displays.size()));
+        std::sort(static_displays.begin(),static_displays.end(),[](const Screen& a,const Screen& b){return center_x(a)<center_x(b);});
+        require(center_x(static_displays[1])<-.1&&center_x(static_displays[4])>.1&&
+                std::abs(center_x(static_displays[2]))<.1&&std::abs(center_x(static_displays[3]))<.1,
+                "Unsupported legacy display spatial arrangement");
+        // Spatial order: captain PFD/ND, central ECAMs, FO ND/PFD.
+        // Preserve the modern extractor's PFD/ND/PFD/ND/ECAM/ECAM order.
+        for(int i:{0,1,5,4,2,3})displays[0].push_back(static_displays[i]);
+        displays[1]=displays[0];
+        OANS_CONFIG("Legacy static six-screen layout detected; sharing UVs between resolution slots");
+    }
     require(displays[0].size()==6&&displays[1].size()==6,"Expected normal and fallback six-screen display batches");
     OANS_CONFIG("OBJ parsed vertices="+std::to_string(vertices.size())+" indices="+std::to_string(indices.size())+" normal/fallback screens="+std::to_string(displays[0].size())+"/"+std::to_string(displays[1].size()));
     AircraftProfile result{};
@@ -148,8 +202,15 @@ AircraftProfile extract(const Source& source,const std::string& icao) {
         const std::string label=side==0?"Left":"Right";
         std::smatch match;
         const std::regex nd("ckpt/lights/ndInner"+label+"/anim[\\s\\S]*?AirbusFBW/DUBrightness\\[([0-9]+)\\]");
-        require(std::regex_search(text,match,nd),"ND brightness manipulator not found: "+label);
-        result.nd_brightness[side]=std::stoi(match[1].str());
+        if(std::regex_search(text,match,nd))result.nd_brightness[side]=std::stoi(match[1].str());
+        else {
+            require(legacy,"ND brightness manipulator not found: "+label);
+            // Legacy widebody knobs have no ndInner animation names. Require
+            // the established ToLiss DU channel's actual manipulator instead.
+            result.nd_brightness[side]=side==0?1:3;
+            const std::regex knob("ATTR_manip_drag_axis[^\\r\\n]*AirbusFBW/DUBrightness\\["+std::to_string(result.nd_brightness[side])+"\\]");
+            require(std::regex_search(text,knob),"Expected legacy ND brightness manipulator missing: "+label);
+        }
         require(result.nd_brightness[side]>=0&&result.nd_brightness[side]<=255,"ND brightness index out of supported range");
         // Captain PFD manipulator has no named animation in this ToLiss layout.
         result.pfd_brightness[side]=side==0?0:2;

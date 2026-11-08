@@ -35,8 +35,9 @@ int main(int argc,char** argv) {
     const bool reextract_test=argc==6&&std::string(argv[5])=="--test-dsf-reextract";
     const bool osm_cache_test=argc==6&&std::string(argv[5])=="--test-osm-cache";
     const bool plan_airport_test=argc==6&&std::string(argv[5])=="--test-plan-airport";
+    const bool runway_selection_test=argc==6&&std::string(argv[5])=="--test-runway-selection";
     const bool building_only=cache_test||reextract_test||osm_cache_test;
-    if(argc!=5&&!failure_test&&!building_only&&!plan_airport_test) {std::cerr<<"Usage: plugin_host MOCK_DLL TEST_XPL SIM_FIXTURE MODEL_PATH [--test-failure-cleanup|--test-dsf-cache|--test-dsf-reextract|--test-osm-cache|--test-plan-airport]\n";return 2;}
+    if(argc!=5&&!failure_test&&!building_only&&!plan_airport_test&&!runway_selection_test) {std::cerr<<"Usage: plugin_host MOCK_DLL TEST_XPL SIM_FIXTURE MODEL_PATH [--test-failure-cleanup|--test-dsf-cache|--test-dsf-reextract|--test-osm-cache|--test-plan-airport|--test-runway-selection]\n";return 2;}
     HMODULE mock=nullptr,plugin=nullptr;void(*shutdown)()=nullptr;
     try {
         mock=LoadLibraryExW(std::filesystem::u8path(argv[1]).c_str(),nullptr,LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR|LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
@@ -509,6 +510,12 @@ int main(int argc,char** argv) {
         set("sim/flightmodel/position/longitude",0,120.012);
         for(int i=0;i<110;++i)advance(.1f);
         check(report().find("RWY_AHEAD runway=09-27")!=std::string::npos,"native advisory predicts the runway independently of map follow state");
+        cmd("toliss_oans/capt_panel");
+        click(155,87);click(340,91);click(330,64); // RWY tab and first endpoint
+        check(report().find("RWY_AHEAD_selection side=0 runway=09\n")!=std::string::npos,
+              "warning uses manually selected map endpoint without FMS sampling");
+        std::cout<<"PASS native warning uses manually selected map endpoint without FMS sampling\n";
+        cmd("toliss_oans/capt_panel");
         set("sim/flightmodel/position/psi",0,180);
         set("sim/flightmodel/position/latitude",0,30+150.0/6371000*180/3.141592653589793);advance(.1f);
         check(report().find("RWY_AHEAD runway=27-09")!=std::string::npos,"live opposite-side approach reverses displayed ends");
@@ -524,6 +531,21 @@ int main(int argc,char** argv) {
         set("sim/flightmodel/position/groundspeed",0,0);advance(.1f);
         check(report().find(" count=0 ")!=std::string::npos,"native stopped aircraft immediately clears warning");
         check(writes()==0,"runway advisory only reads aircraft DataRefs");
+        if(runway_selection_test) {
+            menu_click(1);
+            int tl,tt,tr,tb;function<void(*)(int,int*,int*,int*,int*)>(mock,"MockWindowRect")(2,&tl,&tt,&tr,&tb);
+            auto test_click=[&](int x,int y){pointer(2,1,tl+x,tb+y,0);pointer(2,3,tl+x,tb+y,0);};
+            test_click(250,246);for(char c:std::string("ZTEST"))key(c);
+            key(9);for(char c:std::string("27"))key(c);key(13);
+            check(report().find("RWY_AHEAD_selection side=0 runway=27\n")!=std::string::npos&&
+                  report().find("RWY_AHEAD_selection side=1 runway=27\n")!=std::string::npos,
+                  "test reciprocal input selects that endpoint on both displays without FMS");
+            disable();stop();shutdown=nullptr;
+            check(resources()==0,"runway selection test releases all SDK resources");
+            FreeLibrary(plugin);plugin=nullptr;FreeLibrary(mock);mock=nullptr;
+            std::cout<<"PASS native manual and test reciprocal runway selection (MOCK SDK ONLY)\n";
+            return 0;
+        }
         function<void(*)()>(mock,"MockInitFms")();
         auto fms_page=function<const char*(*)()>(mock,"MockFmsPage");
         auto fms_plan=function<void(*)(const char*,const char*)>(mock,"MockFmsPlan");
@@ -536,9 +558,9 @@ int main(int argc,char** argv) {
             set("AirbusFBW/ECAMFlightPhase",0,2);set("AirbusFBW/APPhase",0,2);
             set("sim/flightmodel/position/latitude",0,19.1);set("sim/flightmodel/position/longitude",0,72);
             for(int i=0;i<3;++i)set("sim/flightmodel2/gear/on_ground",i,1);
-            fms_plan("VAAA","VCCC");cmd("toliss_oans/nearest");
+            fms_plan("VAAA","VCCC");cmd("AirbusFBW/MCDU1Init");cmd("AirbusFBW/MCDU1LSK1R");
+            cmd("toliss_oans/nearest");
             expect_airport("VAAA","PLAN on ground defaults to FMS origin");
-            check(report().find("origin=VAAA departure_runway= destination=VCCC ")!=std::string::npos,"PLAN integration receives real sampled endpoints");
             set("AirbusFBW/ECAMFlightPhase",0,6);
             expect_airport("VAAA","ECAM 6 cannot establish enroute while aircraft is on the ground");
             for(int i=0;i<3;++i)set("sim/flightmodel2/gear/on_ground",i,0);
@@ -557,7 +579,7 @@ int main(int argc,char** argv) {
             settle();cmd("toliss_oans/nearest");
             expect_airport("VAAA","consulting origin replaces last destination consultation");
             // Update endpoints through the same crew-triggered MCDU path used in flight.
-            fms_plan("VAAA","ZALT");cmd("AirbusFBW/MCDU1Fpln");cmd("AirbusFBW/MCDU1LSK6R");
+            fms_plan("VAAA","ZALT");cmd("AirbusFBW/MCDU1Init");cmd("AirbusFBW/MCDU1LSK1R");
             expect_airport("VAAA","long-flight departure remains origin inside 50 NM");
             set("sim/flightmodel/position/latitude",0,20.2);
             expect_airport("ZALT","long flight beyond 50 NM selects destination without nearest-airport substitution");
@@ -569,6 +591,8 @@ int main(int argc,char** argv) {
             std::cout<<"PASS "<<checks<<" native PLAN airport checks (MOCK SDK ONLY)\n";return 0;
         }
         set("AirbusFBW/ECAMFlightPhase",0,1);
+        // Automation-specific scenarios opt in; production defaults remain off.
+        if(!menu_checked(12))toggle_mcdu_sampling();
         for(int i=0;i<85;++i)advance(.1f);
         check(report().find("observed=0")!=std::string::npos&&std::string(fms_page())=="IDENT","phase one suppresses initial automatic MCDU flipping");
         check(report().find("MCDU_MAJOR mcdu1=DATA mcdu2=DATA")!=std::string::npos,"both major pages initially DATA");

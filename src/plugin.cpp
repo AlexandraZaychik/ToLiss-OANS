@@ -53,7 +53,7 @@
 
 using namespace oans;
 namespace {
-constexpr const char* version="0.4.44";
+constexpr const char* version="0.4.46";
 constexpr float white[3]={1,1,1},cyan[3]={.20f,.90f,1},green[3]={0,1,0},amber[3]={1,.65f,0};
 constexpr float taxi_yellow[3]={.95f,.83f,0},magenta[3]={1,.35f,1};
 AtlasFont map_font;
@@ -286,6 +286,7 @@ bool panel_probe_requested=false;
 const char* nd_blocked(int side);
 const char* nd_overlay_blocked(int side);
 bool advisory_display_available(int side,bool pfd);
+std::string selected_runway(const Airport* source,int view);
 const Airport* displayed_advisory_airport();
 std::vector<RunwayAheadHit> displayed_advisories() {
     if(advisory_test.pending)return {};
@@ -397,7 +398,7 @@ std::string form_encode(const std::string& input) {
 #ifdef _WIN32
 std::string post_overpass(const char* host,const std::string& body) {
     const std::wstring wide_host(host,host+std::strlen(host));
-    WinHttpHandle session{WinHttpOpen(L"ToLissOANS/0.4.44 airport-map",WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+    WinHttpHandle session{WinHttpOpen(L"ToLissOANS/0.4.46 airport-map",WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
                                       WINHTTP_NO_PROXY_NAME,WINHTTP_NO_PROXY_BYPASS,0)};
     if(!session.value)throw std::runtime_error(winhttp_error("WinHttpOpen"));
     if(!WinHttpSetTimeouts(session.value,10000,10000,20000,45000))
@@ -719,6 +720,7 @@ void diagnostics() {
      <<" low_speed_seconds="<<runway_advisory.low_speed_seconds()<<" count="<<displayed_advisories().size()
      <<" blink="<<advisory_blink()<<" source="<<(advisory_test.active?"TEST":"LIVE")<<'\n';
     for(const auto& hit:displayed_advisories())f<<"RWY_AHEAD runway="<<hit.first<<"-"<<hit.second<<" eta="<<hit.seconds<<" distance="<<hit.distance<<'\n';
+    for(int side=0;side<2;++side)f<<"RWY_AHEAD_selection side="<<side<<" runway="<<selected_runway(alert_airport,side)<<'\n';
     f<<"TCAS traffic_icons="<<traffic_targets.size()<<" refresh_at="<<traffic_sample_at<<'\n';
     f<<"ADS_B_IN enabled="<<config.adsb_in<<'\n';
     for(const auto& target:traffic_targets)f<<"ADS_B_TARGET slot="<<target.slot<<" flight="<<target.flight_id
@@ -1276,11 +1278,18 @@ void draw_compass(int id) {
     std::ostringstream half;half<<views[id].range_nm*.5;
     for(int sign:{-1,1}) {auto p=point(sign*52,radius*.5+12);text(p.x-14,p.y,half.str(),cyan,65,16);}
 }
-std::string advisory_fms_runway() {
+std::string selected_runway(const Airport* source,int id) {
+    if(!source)return {};
+    // Match the map's selected endpoint, including manual selection without FMS.
+    if(airport&&airport->icao==source->icao&&id>=0&&id<3) {
+        const auto& view=views[id];
+        if(view.feature_kind==0&&view.feature_selection>=0&&view.feature_selection<int(map_features[0].size()))
+            return map_features[0][view.feature_selection].name;
+    }
     const auto& p=fms_port.plan();
-    const auto* source=displayed_advisory_airport();
-    if(!p.observed||!source)return {};
-    if(p.origin.airport==source->icao)return p.origin.runway;
+    if(!p.observed)return {};
+    const bool ground=value("ground",0)>0||value("ground",1)>0||value("ground",2)>0;
+    if(p.origin.airport==source->icao&&(ground||p.origin.airport!=p.destination.airport))return p.origin.runway;
     if(p.destination.airport==source->icao)return p.destination.runway;
     return {};
 }
@@ -1293,7 +1302,7 @@ void draw_advisory(int id,bool pfd=false) {
     if(!a350_ui||displayed_advisories().empty())return;
     const int mode=id<2?nd_mode(id):4;
     if(!map_font.upload(XPLMGenerateTextureNumbers,XPLMBindTexture2d))throw std::runtime_error("Advisory font upload failed");
-    const auto& vertices=a350_ui->advisory(mode,pfd,displayed_advisories(),advisory_fms_runway(),advisory_blink());
+    const auto& vertices=a350_ui->advisory(mode,pfd,displayed_advisories(),selected_runway(displayed_advisory_airport(),id),advisory_blink());
     XPLMSetGraphicsState(0,1,0,0,1,0,0);XPLMBindTexture2d(map_font.texture(),0);
     draw_a350_vertices(vertices,render_gain);graphics();
 }
@@ -1351,8 +1360,7 @@ void draw_map(int id,bool nd) {
         input.position_valid=aircraft_position_ready(id<2?id:-1);
         if(config.adsb_in)input.traffic=traffic_targets;
         input.mode=id<2?nd_mode(id):4;input.range=view.range_nm;
-        if(view.feature_kind==0&&view.feature_selection>=0&&view.feature_selection<int(map_features[0].size()))
-            input.map_runway=map_features[0][view.feature_selection].name;
+        input.map_runway=selected_runway(airport.get(),id);
         input.crosses=view.crosses;input.flags=view.flags;
         if(displayed_advisory_airport()&&airport->icao==displayed_advisory_airport()->icao) {
             input.runway_ahead=displayed_advisories();input.alert_blink=advisory_blink();
@@ -1860,11 +1868,17 @@ void stop_advisory_test() {
 void finish_advisory_test() {
     if(!advisory_test.pending||!airport||airport->icao!=advisory_test.requested_airport)return;
     try {
-        advisory_test.hits=test_runways(*airport,advisory_test.requested_runways);
+        std::string selected;
+        advisory_test.hits=test_runways(*airport,advisory_test.requested_runways,&selected);
         advisory_test.airport=airport;advisory_test.active=true;advisory_test.pending=false;
         const auto& id=advisory_test.hits.front().first;
         const auto found=std::find_if(airport->runways.begin(),airport->runways.end(),[&](const auto& r){return r.name==id;});
-        for(auto& view:views) {view.follow=false;view.center=(found->start+found->end)*.5;view.range_nm=1;}
+        const auto feature=std::find_if(map_features[0].begin(),map_features[0].end(),[&](const auto& f){return f.name==selected;});
+        for(auto& view:views) {
+            view.follow=false;view.center=(found->start+found->end)*.5;view.range_nm=1;
+            view.feature_kind=0;
+            view.feature_selection=feature==map_features[0].end()?-1:static_cast<int>(feature-map_features[0].begin());
+        }
         nd_on[0]=true;
         advisory_test.message="ACTIVE: "+airport->icao+" "+advisory_test.requested_runways+" / "+(advisory_test.steady?"STEADY":"BLINK");
         log("RWY AHEAD TEST enabled: "+airport->icao+" "+advisory_test.requested_runways);

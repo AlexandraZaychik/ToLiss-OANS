@@ -1,6 +1,7 @@
 #include "runway_ahead.hpp"
 #include <algorithm>
 #include <iostream>
+#include <iomanip>
 #include <stdexcept>
 #include <limits>
 using namespace oans;
@@ -50,10 +51,9 @@ int main(){try {
           std::abs(lr_envelope.nose+lr_envelope.tail-63.69)<1e-9&&lr_envelope.half_span==30.15,
           "LR A333 envelope combines manual dimensions with its own ACF reference");
     check(aircraft_geometry::envelope_for("toliss","A333",97,21.86).fallback&&
-          aircraft_geometry::envelope_for("toliss","A339",97,21.86).fallback&&
           aircraft_geometry::envelope_for("unknown","A333",97,21.86).fallback&&
           aircraft_geometry::envelope_for("lr","A333",NAN,21.86).fallback,
-          "missing vendor/model, incomplete dimensions and missing calibration fall back");
+          "missing vendor/model and missing calibration fall back");
     const auto acf=std::filesystem::temp_directory_path()/"oans-envelope-test.acf";
     {std::ofstream out(acf);out<<"I\nP acf/_cgZ 97\nP _gear/0/_gear_z 21.860000610\n";}
     check(aircraft_geometry::load_envelope("lr","A333",acf).nose==lr_envelope.nose,
@@ -76,6 +76,40 @@ int main(){try {
         warm(detector,airport,input);input.position={-60-lr_envelope.half_span+1,-170};
         check(detector.update(&airport,input,.1).empty(),"fallback A320 has its narrower protection span");
     }
+    // Reference and nose-gear stations from the supplied ToLiss ACFs.
+    // Exercise each actual model's protection geometry, independent of display UVs.
+    struct TolissModel {const char* icao;double reference,gear,length,span,nose;};
+    for(const auto& model:std::vector<TolissModel>{
+        {"A321",54,3.75,44.51,35.80,20.3862},
+        {"A339",-6.440000057,-83.269996643,63.66,64.00,30.0877829594128},
+        {"A346",-.680000007,-103.510002136,75.27,63.45,37.9125846489192}}) {
+        const auto envelope=aircraft_geometry::envelope_for("toliss",model.icao,model.reference,model.gear);
+        check(!envelope.fallback&&std::abs(envelope.nose-model.nose)<1e-9,"supplied ToLiss model reference-to-nose calibration");
+        check(std::abs(envelope.nose+envelope.tail-model.length)<1e-9&&envelope.half_span==model.span/2,
+              "model fuselage and wingspan dimensions");
+        {std::ofstream out(acf);out<<std::setprecision(17)<<"P acf/_cgZ "<<model.reference<<"\nP _gear/0/_gear_z "<<model.gear<<'\n';}
+        const auto loaded=aircraft_geometry::load_envelope("toliss",model.icao,acf);
+        check(!loaded.fallback&&loaded.nose==envelope.nose&&loaded.tail==envelope.tail&&loaded.half_span==envelope.half_span,
+              "HiDef/StdDef active ACF station calibration reaches the detector");
+        auto airport=fixture();RunwayAhead detector;auto input=taxi();
+        detector.set_envelope(loaded);warm(detector,airport,input);
+        input.position={500,-80-envelope.nose-70};
+        auto hits=detector.update(&airport,input,.1);
+        check(hits.size()==1&&std::abs(hits[0].seconds-7)<1e-6,"model nose reaches protected runway at seven seconds");
+        input.position.y-=.01;
+        check(detector.update(&airport,input,.1).empty(),"model outside prediction horizon clears advisory");
+        detector.reset();warm(detector,airport,input);
+        input.position={-60-envelope.half_span+.01,-170};
+        check(detector.update(&airport,input,.1).size()==1,"model wing tip intersects protected runway");
+        input.position.x=-60-envelope.half_span-.01;
+        check(detector.update(&airport,input,.1).empty(),"model wing tip clears protected runway");
+        if(model.span>40) {
+            detector.set_envelope(aircraft_geometry::default_envelope);warm(detector,airport,input);
+            input.position={-60-envelope.half_span+.01,-170};
+            check(detector.update(&airport,input,.1).empty(),"widebody wing intersection would be missed by A320 fallback");
+        }
+    }
+    std::filesystem::remove(acf);
     Airport crossing;crossing.icao="CROSS";
     crossing.runways={{"05","23",{-1500,-1000},{1500,1000},45},
                       {"14","32",{-1000,1000},{1000,-1000},45}};
@@ -105,6 +139,11 @@ int main(){try {
     a.runways.push_back({"10L","28R",{0,40},{1000,40},40});
     check(test_runways(a,"09,10l").size()==2,"test supports two actual runway pairs");
     check(test_runways(a,"28r")[0].first=="10L","test reciprocal endpoint resolves actual pair");
+    std::string selected;
+    test_runways(a,"28r",&selected);
+    check(selected=="28R","test preserves requested reciprocal endpoint for green selection");
+    test_runways(a,"RWY09/27",&selected);
+    check(selected=="09","deduplicated pair keeps first requested endpoint selected");
     a.runways.push_back({"11","29",{0,80},{1000,80},40});
     check(bad_input("09,10L,11"),"test rejects more than two physical runways");a=fixture();
     check(std::abs(RunwayAhead::nose+RunwayAhead::tail-37.57)<1e-9,"manual fuselage length");

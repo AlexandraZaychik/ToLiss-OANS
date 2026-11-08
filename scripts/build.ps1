@@ -33,6 +33,12 @@ try {
         & (Join-Path $buildDir 'route_layer_tests.exe') (Join-Path $projectRoot 'assets') (Join-Path $buildDir 'route-layer-fixture.dat')
         if ($LASTEXITCODE -ne 0) { throw 'Route layer tests failed' }
     }
+    & $compiler @common 'src/core.cpp' 'src/runway_ahead.cpp' 'tests/runway_selection_tests.cpp' @luaArgs '-o' (Join-Path $buildDir 'runway_selection_tests.exe')
+    if ($LASTEXITCODE -ne 0) { throw 'Runway selection test compilation failed' }
+    if (!$SkipTests) {
+        & (Join-Path $buildDir 'runway_selection_tests.exe') (Join-Path $projectRoot 'assets') (Join-Path $buildDir 'route-layer-fixture.dat') 'ZTST'
+        if ($LASTEXITCODE -ne 0) { throw 'Runway selection tests failed' }
+    }
     & $compiler @common '-Ivendor/lua-5.4.9/src' 'tests/lua_vertex_buffer_tests.cpp' (Join-Path $buildDir 'lua/liblua.a') '-o' (Join-Path $buildDir 'lua_vertex_buffer_tests.exe')
     if ($LASTEXITCODE -ne 0) { throw 'Lua vertex buffer test compilation failed' }
     if (!$SkipTests) {
@@ -41,6 +47,12 @@ try {
     }
     & $compiler @common '-Ivendor/xptools/Utils' 'tests/aircraft_profile_generator_tests.cpp' 'src/aircraft/toliss/profile.cpp' (Join-Path $buildDir 'dsf/libdsf.a') '-o' (Join-Path $buildDir 'aircraft_profile_generator_tests.exe')
     if ($LASTEXITCODE -ne 0) { throw 'Aircraft profile generator test compilation failed' }
+    & $compiler @common '-Ivendor/xptools/Utils' 'tests/aircraft_profile_legacy_tests.cpp' 'src/aircraft/toliss/profile.cpp' (Join-Path $buildDir 'dsf/libdsf.a') '-o' (Join-Path $buildDir 'aircraft_profile_legacy_tests.exe')
+    if ($LASTEXITCODE -ne 0) { throw 'Legacy aircraft profile test compilation failed' }
+    if (!$SkipTests) {
+        & (Join-Path $buildDir 'aircraft_profile_legacy_tests.exe')
+        if ($LASTEXITCODE -ne 0) { throw 'Legacy aircraft profile tests failed' }
+    }
     & $compiler @common 'tests/aircraft_profile_tests.cpp' '-o' (Join-Path $buildDir 'aircraft_profile_tests.exe')
     if ($LASTEXITCODE -ne 0) { throw 'Aircraft profile test compilation failed' }
     if (!$SkipTests) {

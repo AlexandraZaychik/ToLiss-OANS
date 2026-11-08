@@ -100,6 +100,9 @@ try {
     & (Join-Path $testRoot 'plugin_host.exe') (Join-Path $testRoot 'XPLM_64.dll') (Join-Path $package '64\win.xpl') (Join-Path $testRoot 'sim') (Join-Path $AircraftPath 'a320.acf') '--test-failure-cleanup'
     if ($LASTEXITCODE -ne 0) { throw 'Native host failure-cleanup regression failed' }
     Copy-Item -LiteralPath (Join-Path $projectRoot 'config.ini') -Destination $package -Force
+    # PLAN runs the extraction assertion too; start independently of old caches.
+    $planDsfCache=Join-Path $buildingCache 'dsf_buildings_ZTEST.json'
+    if(Test-Path -LiteralPath $planDsfCache){Remove-Item -LiteralPath $planDsfCache}
     & (Join-Path $testRoot 'plugin_host.exe') (Join-Path $testRoot 'XPLM_64.dll') (Join-Path $package '64\win.xpl') (Join-Path $testRoot 'sim') (Join-Path $AircraftPath 'a320.acf') '--test-plan-airport'
     if ($LASTEXITCODE -ne 0) { throw 'Native PLAN airport selection regression failed' }
     Copy-Item -LiteralPath (Join-Path $projectRoot 'config.ini') -Destination $package -Force

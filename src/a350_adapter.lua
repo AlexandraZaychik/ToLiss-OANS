@@ -187,7 +187,7 @@ end
 
 function MAPX.selected_runway_id()
     local fe=FMS.rwy_end(S.apt)
-    return fe and fe.id or S.map_runway
+    return S.map_runway or (fe and fe.id)
 end
 function MAPX.runway_ident_colour(id)
     return id==MAPX.selected_runway_id() and MC.green or MC.white

@@ -26,10 +26,11 @@ inline constexpr Dimensions a333{63.69, 60.30, 6.67};
 // Zibo B738: supplied drawing, overall length including tail extremity and span.
 // Nose-to-nose-gear is approximately 4.4 m, scaled from the drawing (not labelled).
 inline constexpr Dimensions b738{39.50, 34.40, 4.40};
-// A339 drawing provides overall length only; span and nose-to-gear distance
-// need additional dimensions before this entry can be used for protection.
+// A330-900: Airbus AC A330, 2-2-0 page 7, Dec 01/25.
+// Overall length 63.66 m, wingspan 64.00 m, nose-to-nose-gear 6.67 m.
+// https://www.aircraft.airbus.com/sites/g/files/jlcbta126/files/2025-12/AC_A330_20251201.pdf
 inline constexpr double unknown_dimension = std::numeric_limits<double>::quiet_NaN();
-inline constexpr Dimensions a339{63.69, unknown_dimension, unknown_dimension};
+inline constexpr Dimensions a339{63.66, 64.00, 6.67};
 inline const Dimensions* dimensions_for(std::string_view family, std::string_view model) {
     std::string icao(model);
     for(auto& c:icao)c=static_cast<char>(std::toupper(static_cast<unsigned char>(c)));

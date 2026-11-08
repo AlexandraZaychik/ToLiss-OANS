@@ -497,8 +497,12 @@ int main(int argc,char** argv) {
             }
             if(!found||green_count(buffer)==0)throw std::runtime_error("Partial runway lost selected green ident");
             if(mode==4&&!panel&&along==.1&&angle==0)write_buffer("reports/runtime/0.4.8/partial-selected.bin",buffer);
-            partial.fms_runway.clear();partial.map_runway=runway.name;
+            partial.map_runway=runway.name;
             if(green_count(engine.render(1,partial))==0)throw std::runtime_error("Manual runway selection is not green");
+            bool manual_selected=false;
+            for(const auto& label:engine.runway_labels(1))if(label.selected==runway.name)manual_selected=true;
+            if(!manual_selected)throw std::runtime_error("Manual runway must override conflicting FMS endpoint");
+            partial.fms_runway.clear();
             partial.map_runway.clear();
             if(green_count(engine.render(1,partial))!=0)throw std::runtime_error("Deselected runway leaves stale green ident");
         }

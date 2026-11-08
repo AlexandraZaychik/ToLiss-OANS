@@ -15,7 +15,8 @@ struct RunwayAheadHit {
 };
 // Resolve entered end identifiers to actual physical runway pairs. Invalid
 // input throws; reciprocal ends are deduplicated and at most two pairs allowed.
-std::vector<RunwayAheadHit> test_runways(const Airport& airport,const std::string& text);
+std::vector<RunwayAheadHit> test_runways(const Airport& airport,const std::string& text,
+                                      std::string* selected_end=nullptr);
 // Presentation only: put thresholds on their aircraft-relative left/right
 // sides using true heading and runway geometry. Preserve threat row ordering.
 std::vector<RunwayAheadHit> orient_runway_advisories(const Airport* airport,

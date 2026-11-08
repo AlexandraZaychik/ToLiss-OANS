@@ -25,11 +25,19 @@ for mac user, need to run\
 Q: how to install\
 A: unpack zip. and put folder "00_ToLissOANS" into "X-Plane 12\Aircraft\ToLissA320\plugins". (prefix "00_" to ensure plugin init before FBW)
 
-Q: if something wrong with custom acf file (eg. A319ceo.acf)\
-A: try del "config/toliss/a319.json" and restart xp. if still not work. send me "A319ceo.acf" and "cockpit_INN.obj" and xplane log plz.
+Q: not show on ND\
+A: try del "config/toliss/a320.json"(maybe like this) and restart xp. if still not work, see Q: need help
 
 Q: mcdu2 strange behaviour\
 A: plugin use mcdu2 to get active runway, takeoff&land&altern airport. can turnoff "auto get info from mcdu2"/leave text in mcdu2 to solve
+
+Q: need help (cant show on nd or other fatal problem)\
+A: \
+1) install debug version\
+2) select aircraft\
+3) after load scenery, turn range to 5/10NM, wait 3s, quit xp\
+4) run CollectLog.exe to generate a zip.\
+5) zip + a320.acf(maybe like this) + cockpit_inner.obj(maybe like this) send me
 
 thanks:\
 CHOXON 2 CHOXOFF、heart4sck、KILO_333167、ricardo404
@@ -70,3 +78,12 @@ CHOXON 2 CHOXOFF、heart4sck、KILO_333167、ricardo404
 ~ zibo737 support\
 ~ small improve\
 ~ route highlight
+
+20261107-1305Z update\
+~ small improve\
+~ fix bug
+
+20261108-1520Z update\
+~ support old version toliss\
+~ small improve\
+~ fix bug

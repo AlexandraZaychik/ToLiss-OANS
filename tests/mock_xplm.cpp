@@ -104,6 +104,8 @@ void fms_screen(const std::string& page) {
         if(i==13)d.bytes="                      ↑↓";
         if(i==0&&page=="DATA")d.bytes="DATA INDEX 1/2 ←→";
     }
+    // LR projection can create absent fields; screen providers expose byte DataRefs.
+    for(auto& d:data)if(d.first.rfind("AirbusFBW/MCDU2",0)==0)d.second.type=xplmType_Data;
 }
 void fms_command(const std::string& name) {
     if(!fms_enabled)return;

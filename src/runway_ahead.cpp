@@ -26,7 +26,7 @@ std::vector<RunwayAheadHit> orient_runway_advisories(const Airport* airport,
     return result;
 }
 
-std::vector<RunwayAheadHit> test_runways(const Airport& airport,const std::string& text) {
+std::vector<RunwayAheadHit> test_runways(const Airport& airport,const std::string& text,std::string* selected_end) {
     auto normalize=[](std::string s) {
         for(char& c:s)c=static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
         if(s.rfind("RWY",0)==0)s=s.substr(3);
@@ -44,7 +44,10 @@ std::vector<RunwayAheadHit> test_runways(const Airport& airport,const std::strin
         for(const auto& r:airport.runways)if(normalize(r.name)==wanted||normalize(r.reciprocal)==wanted) {found=&r;break;}
         if(!found)throw std::invalid_argument("RUNWAY "+wanted+" NOT IN "+airport.icao);
         const auto key=std::min(found->name,found->reciprocal)+"/"+std::max(found->name,found->reciprocal);
-        if(seen.insert(key).second)hits.push_back({found->name,found->reciprocal,0,0});
+        if(seen.insert(key).second) {
+            if(hits.empty()&&selected_end)*selected_end=normalize(found->name)==wanted?found->name:found->reciprocal;
+            hits.push_back({found->name,found->reciprocal,0,0});
+        }
     }
     if(hits.empty())throw std::invalid_argument("ENTER A RUNWAY END, E.G. 02L");
     if(hits.size()>2)throw std::invalid_argument("AT MOST TWO PHYSICAL RUNWAYS");
