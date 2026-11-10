@@ -28,6 +28,7 @@ std::vector<A350Traffic> filter_tcas_traffic(const std::vector<TcasTrafficSample
     return result;
 }
 bool A350View::reusable_with(const A350View& o) const {
+    if(!runway_ahead.empty()&&alert_blink!=o.alert_blink)return false;
     if(position_valid!=o.position_valid||!same_map_content(o))return false;
     if(traffic.size()!=o.traffic.size())return false;
     for(size_t i=0;i<traffic.size();++i) {
@@ -48,9 +49,8 @@ bool A350View::reusable_with(const A350View& o) const {
     return translation+rotation<error_px&&ownship+rotation+plane_turn<error_px&&compass_turn<error_px;
 }
 bool A350View::same_map_content(const A350View& o) const {
-    if(simple_stand_names!=o.simple_stand_names)return false;
+    if(simple_stand_names!=o.simple_stand_names||detail_quality!=o.detail_quality)return false;
     if(runway_ahead.size()!=o.runway_ahead.size())return false;
-    if(!runway_ahead.empty()&&alert_blink!=o.alert_blink)return false;
     for(size_t i=0;i<runway_ahead.size();++i)
         if(runway_ahead[i].first!=o.runway_ahead[i].first||runway_ahead[i].second!=o.runway_ahead[i].second)return false;
     auto points=[](const auto& a,const auto& b) {
@@ -70,7 +70,7 @@ struct A350Map::Impl {
     std::optional<Geo> tower;
     double lat=0,lon=0;
     struct Cache {bool ready=false,motion_deferred=false;int layer=0;double time=0,deferred_time=0;
-        std::int64_t deferred_frame=-1;A350View view;std::vector<A350Vertex> vertices;A350CacheStats stats;std::vector<A350RunwayLabel> labels;};
+        std::int64_t deferred_frame=-1;A350View view;std::vector<A350Vertex> vertices,label_vertices;A350CacheStats stats;std::vector<A350RunwayLabel> labels;};
     std::array<Cache,4> cache;
     double last_base_motion_time=-1;
     std::int64_t last_base_motion_frame=-1;
@@ -208,6 +208,11 @@ const std::vector<A350Vertex>& A350Map::render_base(int side,const A350View& vie
     return result;
 }
 const A350View& A350Map::base_view(int side) const{return p_->cache.at(side).view;}
+const std::vector<A350Vertex>& A350Map::base_labels(int side) const{return p_->cache.at(side).label_vertices;}
+const std::vector<A350Vertex>& A350Map::render_alert_fill(const A350View& view) {
+    if(!view.alert_blink||view.runway_ahead.empty())return p_->empty_vertices;
+    return render_impl(3,view,5);
+}
 const std::vector<A350Vertex>& A350Map::render_dynamic(const A350View& view) {
     // The tiny dynamic layer has its own buffer and never invalidates the base.
     return render_impl(3,view,2);
@@ -224,6 +229,7 @@ const std::vector<A350Vertex>& A350Map::render_impl(int side,const A350View& vie
     if(side<0||side>=4)throw std::out_of_range("A350 map side");
     if(!std::isfinite(view.scale)||view.scale<=0||!std::isfinite(view.angle))throw std::invalid_argument("A350 view scale/angle");
     auto& p=*p_;auto& cache=p.cache[side];
+    p.draw_buffer.detail_quality(view.detail_quality);
     const auto started=std::chrono::steady_clock::now();
     auto L=p.L;lua_settop(L,0);lua_getglobal(L,"a350_render");
     for(double n:{view.center.x,view.center.y,view.scale,view.angle,view.anchor.x,view.anchor.y,
@@ -233,9 +239,18 @@ const std::vector<A350Vertex>& A350Map::render_impl(int side,const A350View& vie
     lua_pushnumber(L,view.radius>0?view.radius:(view.mode==3?370:245));lua_pushnumber(L,view.bottom);
     p.string(view.fms_airport);p.string(view.fms_runway);p.alerts(view.runway_ahead);lua_pushboolean(L,view.alert_blink);
     lua_pushboolean(L,view.outside_plan);p.string(view.map_runway);p.traffic(view.traffic);
-    lua_pushboolean(L,view.position_valid);lua_pushboolean(L,view.simple_stand_names);lua_pushinteger(L,layer);p.check(lua_pcall(L,26,2,0));
+    lua_pushboolean(L,view.position_valid);lua_pushboolean(L,view.simple_stand_names);lua_pushinteger(L,layer);
+    lua_pushinteger(L,view.detail_quality);p.check(lua_pcall(L,27,3,0));
     OANS_TRACE("Lua a350_render complete; reading buffers");
     p.draw_buffer.copy(L,cache.vertices);
+    cache.label_vertices.clear();
+    if(layer==1) {
+        const auto count=lua_tointeger(L,3);
+        if(count<0||count%3||static_cast<size_t>(count)>cache.vertices.size())
+            throw std::runtime_error("A350 invalid surface boundary");
+        cache.label_vertices.assign(cache.vertices.begin()+count,cache.vertices.end());
+        cache.vertices.resize(static_cast<size_t>(count));
+    }
     cache.labels.clear();
     for(size_t i=1;i<=lua_rawlen(L,2);++i) {
         lua_rawgeti(L,2,i);const int row=lua_gettop(L);

@@ -37,7 +37,7 @@ def parse(text: str) -> list[Entry]:
         action = int(action_text)
         if key in seen or parent not in seen or (parent != "root" and seen[parent].action):
             raise ValueError(f"菜单 ID 重复或父菜单无效：{key}")
-        if action and (action in actions or not 1 <= action <= 32):
+        if action and (action in actions or not 1 <= action <= 42):
             raise ValueError(f"菜单动作 ID 重复或无效：{action}")
         entry = Entry(key, parent, json.loads(label), action)
         seen[key] = entry
@@ -87,6 +87,40 @@ def save(path: Path, previous: str, ordered: list[Entry]) -> str:
     return updated
 
 
+TEXT_EN = {
+    '插件 → ToLiss OANS': 'Plugins → ToLiss OANS',
+    'ToLiss OANS · 菜单排序': 'ToLiss OANS · Menu order',
+    'ToLiss OANS / 菜单排序': 'ToLiss OANS / Menu order',
+    '拖动菜单项调整同层顺序；移动子菜单时，其下所有选项会一起移动。': 'Drag items within the same level; submenus move with all their children.',
+    '重新读取': 'Reload',
+    '↑ 上移': '↑ Move up',
+    '↓ 下移': '↓ Move down',
+    '保存顺序': 'Save order',
+    '类型': 'Type',
+    '子菜单': 'Submenu',
+    '菜单项': 'Item',
+    '保存后需重新编译插件生效 · Alt+↑ / Alt+↓ 移动 · Ctrl+S 保存': 'Rebuild the plugin after saving · Alt+↑ / Alt+↓ Move · Ctrl+S Save',
+    '读取失败': 'Read failed',
+    '保存失败': 'Save failed',
+    '有未保存的排序': 'Unsaved order',
+    '放弃未保存的排序？': 'Discard the unsaved order?',
+    '已读取 {count} 项，当前顺序与源码一致': 'Loaded {count} items; order matches the source',
+    '顺序已调整，尚未保存': 'Order changed; not saved',
+    '当前顺序与源码一致': 'Order matches the source',
+    '松开后移到「{label}」{where}': 'Release to move {where} “{label}”',
+    '后面': 'after',
+    '前面': 'before',
+    '只能在同一层级排序': 'Items can only be reordered within the same level',
+    '顺序已保存到源码，重新编译插件后生效': 'Order saved to source; rebuild the plugin to apply',
+    '无法识别菜单定义：': 'Unrecognized menu definition: ',
+    '菜单 ID 重复或父菜单无效：': 'Duplicate menu ID or invalid parent: ',
+    '菜单动作 ID 重复或无效：': 'Duplicate or invalid menu action ID: ',
+    '菜单定义为空': 'Menu definition is empty',
+    '只允许调整顺序，不能增删菜单项或更改层级、名称、动作': 'Only reordering is allowed; items, hierarchy, names and actions must stay unchanged',
+    '文件已被外部修改，请重新读取后再排序': 'The file was modified externally. Reload before reordering.',
+}
+
+
 class MenuArrange:
     def __init__(self, root: tk.Tk, path: Path):
         self.root, self.path = root, path
@@ -95,23 +129,35 @@ class MenuArrange:
         self.drag_source = ""
         self.drop_target = ""
         self.drop_after = False
+        self.language = tk.StringVar(root, value="中文")
+        self.localized_widgets = []
+        # Use the plugin's Chinese labels so the preview stays consistent.
+        language_source = Path(__file__).resolve().parents[1] / "src/menu_language.hpp"
+        self.chinese_labels = dict(re.findall(r'\{"(\w+)","([^"\n]*)"\}', read(language_source)))
         root.title("ToLiss OANS · 菜单排序")
         root.geometry("820x650")
         root.minsize(620, 480)
         root.protocol("WM_DELETE_WINDOW", self.close)
         frame = ttk.Frame(root, padding=18)
         frame.pack(fill="both", expand=True)
-        ttk.Label(frame, text="ToLiss OANS / 菜单排序", font=("Microsoft YaHei UI", 16, "bold")).pack(anchor="w")
-        ttk.Label(frame, text="拖动菜单项调整同层顺序；移动子菜单时，其下所有选项会一起移动。", padding=(0, 10)).pack(anchor="w")
+        ttk.Label(frame, textvariable=self.text_variable("ToLiss OANS / 菜单排序"), font=("Microsoft YaHei UI", 16, "bold")).pack(anchor="w")
+        ttk.Label(frame, textvariable=self.text_variable("拖动菜单项调整同层顺序；移动子菜单时，其下所有选项会一起移动。"), padding=(0, 10)).pack(anchor="w")
         toolbar = ttk.Frame(frame)
         toolbar.pack(fill="x", pady=(0, 12))
-        ttk.Button(toolbar, text="重新读取", command=self.reload).pack(side="left")
-        self.up_button = ttk.Button(toolbar, text="↑ 上移", command=lambda: self.move(-1))
+        ttk.Button(toolbar, textvariable=self.text_variable("重新读取"), command=self.reload).pack(side="left")
+        self.up_button = ttk.Button(toolbar, textvariable=self.text_variable("↑ 上移"), command=lambda: self.move(-1))
         self.up_button.pack(side="left", padx=(12, 6))
-        self.down_button = ttk.Button(toolbar, text="↓ 下移", command=lambda: self.move(1))
+        self.down_button = ttk.Button(toolbar, textvariable=self.text_variable("↓ 下移"), command=lambda: self.move(1))
         self.down_button.pack(side="left")
-        self.save_button = ttk.Button(toolbar, text="保存顺序", command=self.write)
+        self.save_button = ttk.Button(toolbar, textvariable=self.text_variable("保存顺序"), command=self.write)
         self.save_button.pack(side="right")
+        language_bar = ttk.Frame(frame)
+        language_bar.pack(fill="x", pady=(0, 10))
+        ttk.Label(language_bar, text="Language / 语言").pack(side="left")
+        self.language_selector = ttk.Combobox(language_bar, textvariable=self.language,
+                                             values=("English", "中文"), state="readonly", width=12)
+        self.language_selector.pack(side="left", padx=8)
+        self.language_selector.bind("<<ComboboxSelected>>", self.switch_language)
         area = ttk.Frame(frame)
         area.pack(fill="both", expand=True)
         self.tree = ttk.Treeview(area, columns=("kind",), selectmode="browse")
@@ -133,9 +179,47 @@ class MenuArrange:
         root.bind("<Control-s>", lambda _event: self.write())
         self.status = tk.StringVar()
         ttk.Label(frame, textvariable=self.status, padding=(0, 12, 0, 4)).pack(anchor="w")
-        ttk.Label(frame, text="保存后需重新编译插件生效 · Alt+↑ / Alt+↓ 移动 · Ctrl+S 保存").pack(anchor="w")
+        ttk.Label(frame, textvariable=self.text_variable("保存后需重新编译插件生效 · Alt+↑ / Alt+↓ 移动 · Ctrl+S 保存")).pack(anchor="w")
         ttk.Label(frame, text=str(path), wraplength=740, padding=(0, 8, 0, 0)).pack(anchor="w")
         self.load()
+        self.switch_language()
+
+    def tr(self, text: str, **values) -> str:
+        if self.language.get() == "English":
+            text = TEXT_EN.get(text, text)
+        return text.format(**values)
+
+    def text_variable(self, text: str):
+        variable = tk.StringVar(self.root, value=self.tr(text))
+        self.localized_widgets.append((variable, text))
+        return variable
+
+    def label(self, entry: Entry) -> str:
+        return self.chinese_labels.get(entry.id, entry.label) if self.language.get() == "中文" else entry.label
+
+    def set_status(self, text: str, **values):
+        self.status.set(self.tr(text, **values))
+
+    def error_text(self, error) -> str:
+        text = str(error)
+        if self.language.get() == "English":
+            for chinese in sorted(TEXT_EN, key=len, reverse=True):
+                text = text.replace(chinese, TEXT_EN[chinese])
+        return text
+
+    def switch_language(self, _event=None):
+        self.root.title(self.tr("ToLiss OANS · 菜单排序"))
+        for variable, text in self.localized_widgets:
+            variable.set(self.tr(text))
+        self.tree.heading("#0", text=self.tr("插件 → ToLiss OANS"))
+        self.tree.heading("kind", text=self.tr("类型"))
+        for entry in self.entries.values():
+            self.tree.item(entry.id, text=self.label(entry),
+                           values=(self.tr("子菜单" if entry.action == 0 else "菜单项"),))
+        # Refresh translated status while retaining the pending sort and selection.
+        self.clear_drop()
+        self.drag_source = ""
+        self.changed()
 
     def ordered(self) -> list[Entry]:
         result = []
@@ -167,7 +251,7 @@ class MenuArrange:
             text = read(self.path)
             entries = parse(text)
         except (OSError, ValueError) as error:
-            messagebox.showerror("读取失败", str(error), parent=self.root)
+            messagebox.showerror(self.tr("读取失败"), self.error_text(error), parent=self.root)
             return
         self.clear_drop()
         self.drag_source = ""
@@ -177,12 +261,12 @@ class MenuArrange:
         self.entries = {entry.id: entry for entry in entries}
         for entry in entries:
             self.tree.insert("" if entry.parent == "root" else entry.parent, "end", iid=entry.id,
-                             text=entry.label, values=("子菜单" if entry.action == 0 else "菜单项",), open=True)
-        self.status.set(f"已读取 {len(entries)} 项，当前顺序与源码一致")
+                             text=self.label(entry), values=(self.tr("子菜单" if entry.action == 0 else "菜单项"),), open=True)
+        self.set_status("已读取 {count} 项，当前顺序与源码一致", count=len(entries))
         self.controls()
 
     def discard(self) -> bool:
-        return not self.dirty() or messagebox.askyesno("有未保存的排序", "放弃未保存的排序？", parent=self.root)
+        return not self.dirty() or messagebox.askyesno(self.tr("有未保存的排序"), self.tr("放弃未保存的排序？"), parent=self.root)
 
     def reload(self):
         if self.discard():
@@ -193,7 +277,7 @@ class MenuArrange:
             self.root.destroy()
 
     def changed(self):
-        self.status.set("顺序已调整，尚未保存" if self.dirty() else "当前顺序与源码一致")
+        self.set_status("顺序已调整，尚未保存" if self.dirty() else "当前顺序与源码一致")
         self.controls()
 
     def move(self, delta: int):
@@ -227,10 +311,10 @@ class MenuArrange:
                 _, y, _, height = self.tree.bbox(target)
                 self.drop_after = event.y >= y + height / 2
                 self.tree.item(target, tags=("drop",))
-                where = "后面" if self.drop_after else "前面"
-                self.status.set(f"松开后移到「{self.entries[target].label}」{where}")
+                where = self.tr("后面" if self.drop_after else "前面")
+                self.set_status("松开后移到「{label}」{where}", label=self.label(self.entries[target]), where=where)
             else:
-                self.status.set("只能在同一层级排序")
+                self.set_status("只能在同一层级排序")
         return "break"
 
     def drop(self, event):
@@ -254,9 +338,9 @@ class MenuArrange:
         try:
             self.original = save(self.path, self.original, self.ordered())
         except (OSError, ValueError) as error:
-            messagebox.showerror("保存失败", str(error), parent=self.root)
+            messagebox.showerror(self.tr("保存失败"), self.error_text(error), parent=self.root)
             return
-        self.status.set("顺序已保存到源码，重新编译插件后生效")
+        self.set_status("顺序已保存到源码，重新编译插件后生效")
         self.controls()
 
 

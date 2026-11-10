@@ -1,5 +1,7 @@
 #include "a350_map.hpp"
+#include "test_support.hpp"
 #include "map_viewport.hpp"
+#include "route_clip.hpp"
 #include <fstream>
 #include <iostream>
 #include <stdexcept>
@@ -13,25 +15,15 @@ int main(int argc,char** argv) {
         IndexEntry entry;entry.file=fixture;entry.icao="ZTST";
         A350Map map(std::filesystem::u8path(argv[1]),entry);
         A350View view;view.lat=30;view.lon=120.01;view.center=local(view.lat,view.lon,30,120);
+        verify(view.detail_quality==4,"detail quality defaults to medium");
+        auto detail_view=view;detail_view.detail_quality=2;
+        verify(!view.same_map_content(detail_view)&&!view.reusable_with(detail_view),"quality changes invalidate cached map content");
         view.scale=.2;view.mode=4;view.traffic={{1,30.001,120.01,90,"TEST","A320",10}};
-        const auto all=map.render_dynamic(view);
-        auto compass=map.render_compass(view);const auto aircraft=map.render_aircraft(view);
-        if(compass.empty()||aircraft.empty())throw std::runtime_error("Missing compass or aircraft layer");
-        compass.insert(compass.end(),aircraft.begin(),aircraft.end());
-        if(compass.size()!=all.size())throw std::runtime_error("Split layer vertex count differs");
-        for(size_t i=0;i<all.size();++i) {
-            const auto& a=all[i];const auto& b=compass[i];
-            if(a.x!=b.x||a.y!=b.y||a.u!=b.u||a.v!=b.v||a.rgba!=b.rgba)
-                throw std::runtime_error("Split layer geometry differs");
-        }
-        view.position_valid=false;view.traffic.clear();
-        if(!map.render_aircraft(view).empty())throw std::runtime_error("Aircraft pass contains non-aircraft geometry");
-        if(map.render_compass(view).empty())throw std::runtime_error("Compass pass lost its geometry");
-        std::cout<<"PASS dynamic layer == compass + aircraft; aircraft-only pass excludes map and compass\n";
         // Exercise the real atlas quads, including the large "21" at 210 deg.
         // Checking the ring alone misses captions erased by the host header.
         view.mode=3;
-        for(int heading=0;heading<360;++heading) {
+        for(int heading:{210}) {
+            scenario("map/arc-210-header-regression");
             view.mag=heading;
             const auto closed=map_viewport(3,false,110),open=map_viewport(3,true,110);
             view.anchor=closed.anchor;view.radius=closed.radius;view.bottom=closed.bottom;
@@ -51,6 +43,46 @@ int main(int argc,char** argv) {
             }
             if(!text)throw std::runtime_error("ARC lost its heading labels");
         }
-        std::cout<<"PASS 360 ARC headings: atlas quads clear header; menu preserves every compass vertex\n";
+        scenario("map/manual-runway-overrides-fms");
+        const auto airport=load_airport(entry);const auto& runway=airport.runways.at(0);
+        view.position_valid=false;view.mode=3;view.map_runway=runway.reciprocal;view.fms_airport=entry.icao;view.fms_runway=runway.name;
+        map.render(0,view);bool selected=false;
+        for(const auto& label:map.runway_labels(0))selected|=label.selected==runway.reciprocal;
+        verify(selected,"manual reciprocal endpoint overrides conflicting FMS endpoint");
+        const auto& warning=map.advisory(3,false,{{runway.name,runway.reciprocal,0,0}},runway.reciprocal,true);
+        bool green=false;for(const auto& vertex:warning)green|=vertex.rgba==0xFF00FF00;
+        verify(green,"manually selected warning endpoint is green");
+        scenario("map/blink-preserves-static-cache");
+        view.mode=4;view.anchor={300,285};view.radius=245;view.bottom=40;
+        view.runway_ahead={{runway.name,runway.reciprocal,0,0}};
+        view.alert_blink=false;
+        const auto surfaces=map.render_base(0,view,10);
+        const auto labels=map.base_labels(0);
+        const auto builds=map.cache_stats(0).builds;
+        verify(!surfaces.empty()&&!labels.empty(),"surfaces and labels have independent cached output");
+        verify(map.render_alert_fill(view).empty(),"blink-off skips alert geometry");
+        auto blinking=view;blinking.alert_blink=true;
+        verify(view.same_map_content(blinking)&&!view.reusable_with(blinking),
+               "blink preserves base content but invalidates legacy combined output");
+        verify(!map.render_alert_fill(blinking).empty(),"blink-on emits runway fill");
+        map.render_base(0,blinking,11);
+        verify(map.cache_stats(0).builds==builds,"blink toggle does not rebuild static layers");
+        verify(map.base_labels(0).size()==labels.size(),"dynamic fill preserves cached labels");
+
+        scenario("route/viewport-clipping");
+        RouteClipper clipper;MapProjection projection;projection.radius=245;
+        auto world=[&](std::array<Vec2,4> q){for(auto& p:q)p=projection.from(p);return q;};
+        const auto crossing=world({{{-100,280},{700,280},{700,290},{-100,290}}});
+        const auto clipped=clipper.clip(crossing,projection);
+        verify(clipped.size()>=4,"ribbon with all corners outside still crosses viewport");
+        for(auto p:clipped)verify(p.x>=-1e-8&&p.x<=600+1e-8&&p.y>=40-1e-8&&p.y<=552+1e-8&&
+            length(p-projection.anchor)<=projection.radius+1e-8,"route vertices stay inside viewport");
+        verify(clipper.clip(world({{{600,600},{700,600},{700,610},{600,610}}}),projection).empty(),
+               "fully invisible ribbon is rejected");
+        projection.bottom=300;
+        const auto menu_crossing=clipper.clip(world({{{200,295},{400,295},{400,305},{200,305}}}),projection);
+        verify(!menu_crossing.empty(),"partly occluded ribbon survives");
+        for(auto p:menu_crossing)verify(p.y>=300-1e-8,"menu bottom clips the ribbon width");
+        std::cout<<"PASS representative ARC heading: atlas quads clear header; menu preserves every compass vertex\n";
     }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
 }

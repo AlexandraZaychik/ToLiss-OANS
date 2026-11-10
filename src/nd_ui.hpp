@@ -70,6 +70,7 @@ struct UiState {
 };
 struct UiModel {
     double bottom_inset=0;
+    bool scale_button=false;
     AirportDatabaseStatus database;
     std::string code="----",name,runway="--",status;
     std::string fms_origin,fms_destination,fms_alternate,fms_status="NOT CONNECTED";

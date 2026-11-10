@@ -2747,7 +2747,14 @@ function MAPX.surface_steps(C)
     end
 
     local steps = {}
-    local pave_L, pave_lim, pave_i = lod, 0, 1
+    -- Quality affects pavement geometry only; markings keep the upstream LOD.
+    local quality = C.detail_quality or 4
+    local pave_lod = quality <= 2 and 3 or (quality == 5 and 1 or
+        (quality == 3 and ((C.rng >= 0.2) and 2 or 3) or
+        ((C.rng >= 1) and 1 or ((C.rng >= 0.2) and 2 or 3))))
+    local pave_factor = quality == 0 and math.huge or (quality == 1 and 1.5 or 1)
+    local pave_L, pave_lim, pave_i = pave_lod, 0, 1
+    local pave_base_lim = 0
     local FILL = { "fill_c", "fill_m", "fill" }
     local HOLE = { "holes_c", "holes_m", "holes" }
     -- 1) Hintergrund; feinste Detailstufe der Rollflaechen, die ins Budget passt
@@ -2755,20 +2762,11 @@ function MAPX.surface_steps(C)
         DL.n = 0
         DL.rectf(x0, y0, x0 + cw, y0 + ch, MC.bg)
         if G.has_pave then
-            local room = (BULK - DL.n) * 0.45
-            local L = lod
-            while L > 1 do
-                local nv = 0
-                for _, gp in ipairs(G.polys) do
-                    if in_view(gp.minx, gp.miny, gp.maxx, gp.maxy) then
-                        nv = nv + count_tris(gp[FILL[L]]) + count_tris(gp[HOLE[L]])
-                    end
-                end
-                if nv <= room then break end
-                L = L - 1
-            end
-            pave_L = L
-            pave_lim = math.max(DL.n + room, BULK * 0.5)
+            -- Keep the selected geometry level even under budget pressure.
+            -- Extra pavement allowance must not consume other layers' budgets.
+            pave_base_lim = math.max(DL.n + (BULK - DL.n) * 0.45, BULK * 0.5)
+            pave_lim = pave_factor == math.huge and math.huge or
+                DL.n + (pave_base_lim - DL.n) * pave_factor
         end
         return true
     end
@@ -2781,11 +2779,12 @@ function MAPX.surface_steps(C)
                 pave_i = pave_i + 1
                 if in_view(gp.minx, gp.miny, gp.maxx, gp.maxy) then
                     if draw_tris(gp[FILL[L]], MC.apron, pave_lim) then
-                        draw_tris(gp[HOLE[L]], MC.bg, pave_lim + 4000)
+                        draw_tris(gp[HOLE[L]], MC.bg, pave_lim + 4000 * pave_factor)
                     end
                 end
                 if pave_i % 8 == 0 and late() then return false end
             end
+            DL.n = math.min(DL.n, pave_base_lim)
             return true
         end
         -- keine Flaechen in den Daten: Rollwege als breite Baender aus dem Rollwegnetz
@@ -2838,8 +2837,13 @@ function MAPX.surface_steps(C)
     steps[#steps + 1] = function()
         -- braune Raender der Rollflaechen
         if G.has_pave then
+            local before = DL.n
+            local room = math.max(0, BULK - before) * 0.2
+            local allowance = pave_factor == math.huge and math.huge or room * pave_factor
+            local distance2 = (pave_L == 1) and 100 or ((pave_L == 2) and 16 or 9)
             stroke({ (pave_L == 1) and G.pave_c or ((pave_L == 2) and G.pave_m or G.pave) }, MC.shoulder, (sc >= 0.6) and 2 or 1,
-                (pave_L == 1) and 100 or md2, (BULK - DL.n) * 0.2)
+                distance2, allowance)
+            DL.n = math.min(DL.n, before + room)
         end
         return true
     end
@@ -3821,8 +3825,8 @@ local function traffic_label(C, target, x, y)
     end
 end
 
-function a350_render(cx, cy, scale, angle, ax, ay, lat, lon, psi, mag, mode, rng, crosses, flags, radius, bottom, fms_airport, fms_runway, alerts, blink, outside_plan, map_runway, traffic, position_valid, simple_stand_names, layer)
-    GLB.n, GLB.cap = 0, 180000
+function a350_render(cx, cy, scale, angle, ax, ay, lat, lon, psi, mag, mode, rng, crosses, flags, radius, bottom, fms_airport, fms_runway, alerts, blink, outside_plan, map_runway, traffic, position_valid, simple_stand_names, layer, detail_quality)
+    GLB.n, GLB.cap = 0, detail_quality == 0 and math.huge or (detail_quality == 1 and 270000 or 180000)
     native_draw_reset()
     GLB.wu, GLB.wv = TF.wu, TF.wv
     GLB.px, GLB.ts = 1, 2
@@ -3838,7 +3842,8 @@ function a350_render(cx, cy, scale, angle, ax, ay, lat, lon, psi, mag, mode, rng
     local C = {G=G, x0=0, y0=0, cw=300, ch=300, nd={side=0}, placed={}, hit={},
                wcx=cx, wcy=cy, sc=scale/2, hv=angle/D2R, hc=math.cos(angle), hs=math.sin(angle),
                ax=ax/2, ay=(600-ay)/2, mode=mode, rng=rng, Rr=radius/2,
-               map_bottom=(600-bottom)/2,pair_segments={},label_info={}}
+               map_bottom=(600-bottom)/2,pair_segments={},label_info={},
+               detail_quality=detail_quality}
     MAPX.setup(C)
     if layer == 1 then
         -- Match map_texture_margin=64 host pixels. Keep label placement in the
@@ -3847,8 +3852,10 @@ function a350_render(cx, cy, scale, angle, ax, ay, lat, lon, psi, mag, mode, rng
         DL.clip = {-64,664,-64,664}
         DL.pad = 32 -- local units; geometry clips separately from atlas text.
     end
-    if layer == 0 or layer == 1 then
-    MAPX.surfaces(C)
+    local surface_vertices = 0
+    if layer == 0 or layer == 1 then MAPX.surfaces(C) end
+    if layer == 1 then surface_vertices = GLB.n end
+    if layer == 0 or layer == 5 then
     -- Keep the original runway geometry, projection, polygon fill and clipping.
     -- The host supplies the ANF threats instead of the upstream first-hit RWYA.
     if blink then
@@ -3866,6 +3873,8 @@ function a350_render(cx, cy, scale, angle, ax, ay, lat, lon, psi, mag, mode, rng
             end
         end
     end
+    end -- runway alert overlay
+    if layer == 0 or layer == 1 then
     -- Reserve the host header and lower controls before original label placement.
     C.placed = {{0,0,300,25}, {0,(600-bottom)/2,300,300},
                 {OANS_R[1]-2,OANS_R[2]-2,300,OANS_R[4]+2}}
@@ -3877,7 +3886,7 @@ function a350_render(cx, cy, scale, angle, ax, ay, lat, lon, psi, mag, mode, rng
     MAPX.draw_tower(C)
     select_stand_names(G, simple_stand_names)
     MAPX.labels(C)
-    end -- base layer: surfaces, runway fill, tower and labels
+    end -- static labels and tower (separated from surfaces by the host)
     if layer == 0 or layer == 2 or layer == 3 then
     NDUI.compass(C)
     end
@@ -3914,7 +3923,7 @@ function a350_render(cx, cy, scale, angle, ax, ay, lat, lon, psi, mag, mode, rng
         end
     end
     end -- dynamic layer: compass, ownship and traffic
-    return GLB.n, C.label_info
+    return GLB.n, C.label_info, surface_vertices
 end
 
 -- Use A350's original B612 metrics and Airbus key primitives for annunciation.

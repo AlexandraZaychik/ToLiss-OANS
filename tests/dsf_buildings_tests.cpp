@@ -1,4 +1,5 @@
 #include "dsf_buildings.hpp"
+#include "test_support.hpp"
 #include <cmath>
 #include <chrono>
 #include <cstring>
@@ -53,25 +54,35 @@ int main(int argc,char** argv) {
         write(run/"Custom Scenery/scenery_packs.ini","I\n1000\nSCENERY_PACK Custom Scenery/High/\nSCENERY_PACK_DISABLED Custom Scenery/Disabled/\nSCENERY_PACK Custom Scenery/Low/\nSCENERY_PACK *GLOBAL_AIRPORTS*\n");
         write(high/tile,dsf());write(low/tile,dsf());write(off/tile,dsf());
         auto packs=oans::dsf_scenery_packs(run);check(packs[0]==high&&packs[1]==low,"active scenery priority and disabled pack");
+        scenario("dsf/binary-priority-disabled");
         auto r=oans::extract_runtime_dsf(run,e,run/"cache",cancel);
         check(r.buildings==2&&r.terminals==2&&r.tiles==2&&fs::exists(r.cache),"direct binary DSF extraction");
+        scenario("dsf/facade-exclusion");
         write(high/tile,dsf(true));
         r=oans::extract_runtime_dsf(run,e,run/"cache",cancel);check(r.buildings==1,"higher-priority facade exclusion applies only below");
+        scenario("dsf/airport-filter-ownership");
         write(high/tile,dsf());write(low/tile,dsf(false,true));
         r=oans::extract_runtime_dsf(run,e,run/"cache",cancel);check(r.buildings==1,"airport filter hides overridden lower airport");
+        scenario("dsf/curved-pool");
         write(high/tile,dsf(false,true,true));
         r=oans::extract_runtime_dsf(run,e,run/"cache",cancel);check(r.buildings==1,"owner airport filter retained, curve-depth pool supported");
+        scenario("dsf/invalid-pool-index");
         auto broken=dsf();const auto commands=broken.find("SDMC");check(commands!=Bytes::npos,"fixture commands located");
         broken[commands+9]=char(255);write(high/tile,broken);
         r=oans::extract_runtime_dsf(run,e,run/"cache",cancel);check(r.cache.empty(),"bad point pool selection falls back safely");
+        scenario("dsf/invalid-vertex-index");
         broken=dsf();broken[broken.size()-18]=char(255);write(high/tile,broken);
         r=oans::extract_runtime_dsf(run,e,run/"cache",cancel);check(r.cache.empty(),"bad vertex index falls back safely");
+        scenario("dsf/truncated-pool");
         broken=dsf();broken[broken.find("LOOP")+8]=char(255);write(high/tile,broken);
         r=oans::extract_runtime_dsf(run,e,run/"cache",cancel);check(r.cache.empty(),"truncated encoded pool falls back safely");
+        scenario("dsf/truncated-atom");
         broken=dsf();broken[4]='X';broken.resize(30);write(high/tile,broken);
         r=oans::extract_runtime_dsf(run,e,run/"cache",cancel);check(r.cache.empty(),"truncated atom falls back safely");
+        scenario("dsf/invalid-file-clears-cache");
         write(high/tile,"corrupt DSF file with at least 28 bytes");
         r=oans::extract_runtime_dsf(run,e,run/"cache",cancel);check(r.buildings==0&&r.cache.empty(),"invalid DSF does not reuse stale JSON");
+        scenario("dsf/cancellation");
         cancel=true;r=oans::extract_runtime_dsf(run,e,run/"cache",cancel);check(r.cache.empty(),"cooperative cancellation");
         std::cout<<"Runtime DSF tests passed: binary decode, priority, disabled pack, exclusions, airport filter, curve pool, corrupt pool/index/atom, invalid/stale cache, cancellation\n";
         return 0;

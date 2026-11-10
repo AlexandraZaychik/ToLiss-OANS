@@ -358,6 +358,14 @@ std::optional<IndexEntry> nearest(const std::vector<IndexEntry>& entries,double 
     }
     return best;
 }
+std::optional<IndexEntry> nearest_canonical(const std::vector<IndexEntry>& entries,double lat,double lon,double radius) {
+    const IndexEntry* best=nullptr;double d=radius;
+    for(const auto& e:entries) {
+        double v=length(local(e.lat,e.lon,lat,lon));if(v<d) {d=v;best=&e;}
+    }
+    if(best)return *best;
+    return std::nullopt;
+}
 Vec2 Homography::map(Vec2 p) const {
     double w=h[6]*p.x+h[7]*p.y+h[8];if(std::abs(w)<1e-12)return {1e20,1e20};
     return {(h[0]*p.x+h[1]*p.y+h[2])/w,(h[3]*p.x+h[4]*p.y+h[5])/w};

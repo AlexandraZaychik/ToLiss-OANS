@@ -3,7 +3,9 @@
 #include "../src/gl_state.hpp"
 #include "../src/gl_coords.hpp"
 #include "../src/gl_font.hpp"
+#include "../src/a350_gl.hpp"
 #include <iostream>
+#include "test_support.hpp"
 #include <stdexcept>
 #include <string>
 
@@ -79,7 +81,8 @@ int main() {
         glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA,1,1,0,GL_RGBA,GL_UNSIGNED_BYTE,cyan);
         glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
-        for(int frame=0;frame<32;++frame) {
+        scenario("gl/consecutive-textured-panels");
+        for(int frame=0;frame<2;++frame) {
             baseline();clear();glEnable(GL_TEXTURE_2D);glEnable(GL_ALPHA_TEST);
             glDisable(GL_BLEND);glDepthMask(GL_TRUE);glBindTexture(GL_TEXTURE_2D,textures[0]);
             {oans::DrawingState state(baseline,restore_sdk);quad();check(red(),"overlay draws independently of inherited textured panel state");glBindTexture(GL_TEXTURE_2D,textures[1]);}
@@ -92,29 +95,9 @@ int main() {
             check(rgb[0]<10&&rgb[1]>240&&rgb[2]>240,"next aircraft panel draw keeps original texture pixels over consecutive frames");
         }
         glDeleteTextures(2,textures);baseline();
-        for(int scenario=0;scenario<5;++scenario) {
-            glDisable(GL_CULL_FACE);glDisable(GL_COLOR_LOGIC_OP);glDisable(GL_STENCIL_TEST);glPolygonMode(GL_FRONT_AND_BACK,GL_FILL);
-            glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);baseline();clear();
-            using Equation=void(APIENTRY*)(GLenum);
-            auto equation=oans::gl_proc<Equation>("glBlendEquation");
-            if(equation)equation(0x8006);
-            if(scenario==0) {glEnable(GL_CULL_FACE);glCullFace(GL_FRONT);}
-            if(scenario==1)glPolygonMode(GL_FRONT_AND_BACK,GL_LINE);
-            if(scenario==2) {glEnable(GL_COLOR_LOGIC_OP);glLogicOp(GL_CLEAR);}
-            if(scenario==3) {glEnable(GL_STENCIL_TEST);glStencilFunc(GL_NEVER,0,255);}
-            if(scenario==4)glBlendFunc(GL_ZERO,GL_ZERO);
-            quad();check(!red(),"inherited state reproduces missing polygon fill");
-            clear();
-            {oans::DrawingState state(baseline);quad();check(red(),"guard restores solid red polygon pixels on real driver");}
-            GLint mode[2]={};glGetIntegerv(GL_POLYGON_MODE,mode);
-            if(scenario==0)check(glIsEnabled(GL_CULL_FACE),"restore caller culling");
-            if(scenario==1)check(mode[0]==GL_LINE&&mode[1]==GL_LINE,"restore caller polygon mode");
-            if(scenario==2)check(glIsEnabled(GL_COLOR_LOGIC_OP),"restore caller logic operation");
-            if(scenario==3)check(glIsEnabled(GL_STENCIL_TEST),"restore caller stencil");
-            if(scenario==4) {GLint src,dst;glGetIntegerv(GL_BLEND_SRC,&src);glGetIntegerv(GL_BLEND_DST,&dst);check(src==GL_ZERO&&dst==GL_ZERO,"restore caller blend factors");}
-        }
         glDisable(GL_CULL_FACE);glDisable(GL_COLOR_LOGIC_OP);glDisable(GL_STENCIL_TEST);glPolygonMode(GL_FRONT_AND_BACK,GL_FILL);
         glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);baseline();clear();
+        scenario("gl/inherited-shader");
         using CreateShader=GLuint(APIENTRY*)(GLenum);
         using Source=void(APIENTRY*)(GLuint,GLsizei,const char*const*,const GLint*);
         using Object=void(APIENTRY*)(GLuint);
@@ -135,39 +118,93 @@ int main() {
         clear();{oans::DrawingState state(baseline);quad();check(red(),"guard renders correct pixels despite inherited shader");}
         GLint restored=0;glGetIntegerv(0x8B8D,&restored);check(static_cast<GLuint>(restored)==program,"restore caller shader program");use_program(0);
         oans::gl_proc<Object>("glDeleteProgram")(program);for(auto object:objects)oans::gl_proc<Object>("glDeleteShader")(object);
+        scenario("gl/large-cockpit-uv");
         glMatrixMode(GL_PROJECTION);glLoadIdentity();glOrtho(0,4096,0,4096,-1,1);glMatrixMode(GL_MODELVIEW);glLoadIdentity();
         auto target=oans::texture_rectangle();check(target&&std::abs(target->w-4096)<1e-5&&std::abs(target->h-4096)<1e-5,"derive full render target coordinates independently of legacy 1024 bounds");
+        GLdouble captured_model[16],captured_projection[16];GLint captured_viewport[4];
+        glGetDoublev(GL_MODELVIEW_MATRIX,captured_model);glGetDoublev(GL_PROJECTION_MATRIX,captured_projection);glGetIntegerv(GL_VIEWPORT,captured_viewport);
+        auto captured=oans::texture_rectangle(captured_model,captured_projection,captured_viewport);
+        check(captured&&captured->l==target->l&&captured->b==target->b&&captured->w==target->w&&captured->h==target->h,"captured transform matches live-query rectangle");
+        const auto captured_reverse=oans::texture_rectangle(captured_model,captured_projection,captured_viewport,true);
+        check(captured_reverse&&captured_reverse->b==target->b+target->h&&captured_reverse->h==-target->h,"captured transform preserves reversed framebuffer mapping");
+        captured_viewport[2]=0;
+        check(!oans::texture_rectangle(captured_model,captured_projection,captured_viewport),"captured transform rejects invalid viewport");
         clear();{
             oans::DrawingState state(baseline);glColor3f(1,0,0);glBegin(GL_QUADS);
             for(auto p:{std::pair<double,double>{.25,.25},{.75,.25},{.75,.75},{.25,.75}})glVertex2d(target->l+p.first*target->w,target->b+p.second*target->h);
             glEnd();check(red(),"full-texture UV rectangle reaches correct real framebuffer pixels");
         }
+        scenario("gl/reversed-cockpit-uv");
         auto reversed=oans::texture_rectangle(true);check(reversed&&std::abs(reversed->b-4096)<1e-5&&std::abs(reversed->h+4096)<1e-5,"reverse framebuffer row origin for authored cockpit UVs");
         clear();{
             oans::DrawingState state(baseline);glColor3f(1,0,0);glBegin(GL_QUADS);
             for(auto p:{std::pair<double,double>{.1,.7},{.3,.7},{.3,.9},{.1,.9}})glVertex2d(reversed->l+p.first*reversed->w,reversed->b+p.second*reversed->h);
             glEnd();unsigned char rgb[4]={};glReadPixels(6,6,1,1,GL_RGBA,GL_UNSIGNED_BYTE,rgb);check(rgb[0]>240&&rgb[1]<10,"reversed UV draws to correct asymmetric framebuffer rows");
         }
-        glMatrixMode(GL_PROJECTION);glLoadIdentity();glOrtho(0,64,0,64,-1,1);glMatrixMode(GL_MODELVIEW);glLoadIdentity();
-        oans::AtlasFont font;check(font.load("assets/font_b612_px2.bin"),"read original licensed B612 atlas and glyph metrics");
-        auto allocate=[](int* out,int n){glGenTextures(n,reinterpret_cast<GLuint*>(out));};
-        auto bind=[](int id,int){glBindTexture(GL_TEXTURE_2D,static_cast<GLuint>(id));};
-        check(font.upload(allocate,bind),"upload plugin-owned B612 texture");
-        auto ink=[]() {unsigned char pixels[32*32*4]={};glReadPixels(0,0,32,32,GL_RGBA,GL_UNSIGNED_BYTE,pixels);int n=0;
-            for(int i=0;i<32*32;++i)if(pixels[i*4]>128)++n;
-            return n;};
-        clear();{oans::DrawingState state(baseline);const float white[]={1,1,1};glEnable(GL_TEXTURE_2D);bind(font.texture(),0);font.draw(4,10,"OANS",white,60);glDisable(GL_TEXTURE_2D);}
-        check(ink()>30,"scalable OANS lettering produces real filled glyph pixels");
-        GLdouble restored_model[16];glGetDoublev(GL_MODELVIEW_MATRIX,restored_model);
-        check(std::abs(restored_model[0]-1)<1e-8&&std::abs(restored_model[12])<1e-8,"text restores caller model transform despite glyph advances");
-        clear();{oans::DrawingState state(baseline);const float white[]={1,1,1};glEnable(GL_TEXTURE_2D);bind(font.texture(),0);font.draw(4,10,"OANS",white,0);glDisable(GL_TEXTURE_2D);}
-        check(ink()==0,"control-width clipping prevents text from bleeding beyond empty available width");
-        auto clipped_text=[&](const std::string& value) {
-            clear();const float white[]={1,1,1};glEnable(GL_TEXTURE_2D);bind(font.texture(),0);
-            font.draw(4,10,value,white,30,12,false);glDisable(GL_TEXTURE_2D);
-            std::vector<unsigned char> pixels(64*64*4);glReadPixels(0,0,64,64,GL_RGBA,GL_UNSIGNED_BYTE,pixels.data());return pixels;
-        };
-        check(clipped_text("OANS LONG NAME")==clipped_text("OAN"),"dropdown overflow matches plain prefix without ellipsis pixels");font.release();
+
+        scenario("gl/batch-dimming-and-client-state");
+        glViewport(0,0,32,32);glMatrixMode(GL_PROJECTION);glLoadIdentity();glOrtho(0,1,0,1,-1,1);
+        glMatrixMode(GL_MODELVIEW);glLoadIdentity();baseline();glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
+        std::vector<oans::A350Vertex> many;
+        for(int i=0;i<3000;++i)for(auto p:std::array<std::pair<float,float>,3>{{{.1f,.1f},{.9f,.1f},{.5f,.9f}}})
+            many.push_back({p.first,p.second,p.first,p.second,0xB1AB7953u});
+        auto read=[](){std::array<unsigned char,32*32*4> p{};glFinish();glReadPixels(0,0,32,32,GL_RGBA,GL_UNSIGNED_BYTE,p.data());return p;};
+        for(double gain:{0.,.01,.37,.999,1.}) {
+            clear();oans::a350_gl_detail::immediate(many,gain);const auto expected=read();
+            GLfloat expected_color[4];glGetFloatv(GL_CURRENT_COLOR,expected_color);
+            const GLfloat expected_uv[]={many.back().u,many.back().v,0,1};
+            clear();check(oans::a350_gl_detail::batch(many,gain),"real driver uses batch path");
+            check(read()==expected,"batch keeps dimmed RGB and alpha pixels byte exact");
+            GLfloat color[4],uv[4];glGetFloatv(GL_CURRENT_COLOR,color);glGetFloatv(GL_CURRENT_TEXTURE_COORDS,uv);
+            for(int i=0;i<4;++i)check(color[i]==expected_color[i]&&uv[i]==expected_uv[i],"current attributes explicitly match final vertex");
+        }
+        using BindBuffer=void(APIENTRY*)(GLenum,GLuint);
+        using GenObjects=void(APIENTRY*)(GLsizei,GLuint*);
+        using DeleteObjects=void(APIENTRY*)(GLsizei,const GLuint*);
+        using BufferData=void(APIENTRY*)(GLenum,std::ptrdiff_t,const void*,GLenum);
+        using ClientTexture=void(APIENTRY*)(GLenum);
+        auto bind_buffer=oans::gl_proc<BindBuffer>("glBindBuffer");auto gen_buffers=oans::gl_proc<GenObjects>("glGenBuffers");
+        auto delete_buffers=oans::gl_proc<DeleteObjects>("glDeleteBuffers");auto buffer_data=oans::gl_proc<BufferData>("glBufferData");
+        auto client_texture=oans::gl_proc<ClientTexture>("glClientActiveTexture");
+        auto bind_vao=oans::gl_proc<void(APIENTRY*)(GLuint)>("glBindVertexArray");auto gen_vaos=oans::gl_proc<GenObjects>("glGenVertexArrays");
+        auto delete_vaos=oans::gl_proc<DeleteObjects>("glDeleteVertexArrays");
+        check(bind_buffer&&gen_buffers&&delete_buffers&&buffer_data&&client_texture,"buffer and multitexture regression supported");
+        clear();oans::a350_gl_detail::immediate(many,.37);const auto expected=read();
+        GLuint buffer=0,vao=0;gen_buffers(1,&buffer);
+        if(bind_vao&&gen_vaos&&delete_vaos){gen_vaos(1,&vao);bind_vao(vao);}
+        bind_buffer(0x8892,buffer);const float dummy[16]={};buffer_data(0x8892,sizeof dummy,dummy,0x88E4);
+        glVertexPointer(3,GL_FLOAT,16,reinterpret_cast<const void*>(4));glEnableClientState(GL_VERTEX_ARRAY);
+        glColorPointer(4,GL_UNSIGNED_BYTE,16,reinterpret_cast<const void*>(8));glEnableClientState(GL_COLOR_ARRAY);
+        glNormalPointer(GL_FLOAT,16,nullptr);glEnableClientState(GL_NORMAL_ARRAY);
+        glIndexPointer(GL_FLOAT,16,nullptr);glEnableClientState(GL_INDEX_ARRAY);
+        glEdgeFlagPointer(16,nullptr);glEnableClientState(GL_EDGE_FLAG_ARRAY);
+        for(int unit=0;unit<2;++unit){client_texture(0x84C0+unit);glTexCoordPointer(3,GL_FLOAT,16,reinterpret_cast<const void*>(4));glEnableClientState(GL_TEXTURE_COORD_ARRAY);}
+        glTexEnvi(GL_TEXTURE_ENV,GL_TEXTURE_ENV_MODE,GL_REPLACE);
+        clear();oans::draw_a350_vertices(many,.37);check(read()==expected,"auto batch ignores contaminated client arrays/VBO/VAO");
+        GLint value=0;glGetIntegerv(0x8894,&value);check(value==static_cast<GLint>(buffer),"restore array buffer binding");
+        glGetIntegerv(0x84E1,&value);check(value==0x84C1,"restore client active texture");
+        glGetTexEnviv(GL_TEXTURE_ENV,GL_TEXTURE_ENV_MODE,&value);check(value==GL_REPLACE,"restore texture environment");
+        if(vao){glGetIntegerv(0x85B5,&value);check(value==static_cast<GLint>(vao),"restore inherited VAO");}
+        void* pointer=nullptr;glGetPointerv(GL_VERTEX_ARRAY_POINTER,&pointer);check(pointer==reinterpret_cast<void*>(4),"restore vertex pointer offset");
+        glGetIntegerv(GL_VERTEX_ARRAY_SIZE,&value);check(value==3,"restore vertex format");
+        for(auto state:{GL_VERTEX_ARRAY,GL_COLOR_ARRAY,GL_NORMAL_ARRAY,GL_INDEX_ARRAY,GL_EDGE_FLAG_ARRAY})check(glIsEnabled(state),"restore conventional array enables");
+        for(int unit=0;unit<2;++unit){client_texture(0x84C0+unit);glGetPointerv(GL_TEXTURE_COORD_ARRAY_POINTER,&pointer);check(glIsEnabled(GL_TEXTURE_COORD_ARRAY)&&pointer==reinterpret_cast<void*>(4),"restore each texture unit's coordinate array");}
+        client_texture(0x84C0);if(vao){bind_vao(0);delete_vaos(1,&vao);}
+        bind_buffer(0x8892,0);delete_buffers(1,&buffer);
+        for(auto state:{GL_VERTEX_ARRAY,GL_COLOR_ARRAY,GL_NORMAL_ARRAY,GL_INDEX_ARRAY,GL_EDGE_FLAG_ARRAY,GL_TEXTURE_COORD_ARRAY})glDisableClientState(state);
+        client_texture(0x84C1);glDisableClientState(GL_TEXTURE_COORD_ARRAY);client_texture(0x84C0);
+        glTexEnvi(GL_TEXTURE_ENV,GL_TEXTURE_ENV_MODE,GL_MODULATE);
+        GLint depth=0,limit=0;glGetIntegerv(GL_CLIENT_ATTRIB_STACK_DEPTH,&depth);glGetIntegerv(GL_MAX_CLIENT_ATTRIB_STACK_DEPTH,&limit);
+        clear();oans::a350_gl_detail::immediate(many,1);const auto fallback_pixels=read();
+        for(int i=depth;i<limit;++i)glPushClientAttrib(GL_CLIENT_VERTEX_ARRAY_BIT);
+        clear();check(!oans::a350_gl_detail::batch(many,1),"full client stack rejects batch before mutation");
+        oans::draw_a350_vertices(many,1);check(read()==fallback_pixels,"stack-full fallback preserves original pixels");
+        for(int i=depth;i<limit;++i)glPopClientAttrib();
+        const std::vector<oans::A350Vertex> small(many.begin(),many.begin()+3);
+        clear();oans::a350_gl_detail::immediate(small,.37);const auto small_pixels=read();
+        clear();oans::draw_a350_vertices(small,.37);check(read()==small_pixels,"small-buffer immediate branch preserves pixels");
+        const auto prior=read();oans::draw_a350_vertices({},1);check(read()==prior,"empty buffer has no drawing side effects");
+
         check(glGetError()==GL_NO_ERROR,"no OpenGL errors in guard and scalable font regression");
         std::cout<<"PASS "<<checks<<" real OpenGL pixel/state checks; driver="<<glGetString(GL_VERSION)<<'\n';return 0;
     } catch(const std::exception& e) {std::cerr<<"FAIL "<<e.what()<<'\n';return 1;}

@@ -45,9 +45,10 @@ public:
     std::string tick(double now,const McduScreen& screen,bool usable=true,McduPage restore_page=McduPage::unknown);
     void activity(double now,bool request_sample=true); // all input defers; only selected keys request
     // Read the operated INIT page without a navigation transaction.
-    bool capture_init(double now,const McduScreen& screen,bool alternate);
+    bool capture_init(double now,const McduScreen& screen);
     void discard_request() {requested_=requested_by_crew_=crew_session_=false;}
     void reset(bool initial_sample=true);
+    bool has_request() const {return requested_;}
     void request() {if(!requested_by_crew_){requested_=true;next_=0;}}
     void stop_automatic_capture();
     void set_flight_phase(int phase) {flight_phase_=phase;}

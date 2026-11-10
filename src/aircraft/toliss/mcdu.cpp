@@ -130,7 +130,7 @@ bool parse_fuel_pred(const McduScreen& s,FmsPlan& p) {
     if(e.airport.empty()||token!=e.airport)return false;
     p.alternate=e.airport;return true;
 }
-bool FmsSampler::capture_init(double now,const McduScreen& s,bool alternate) {
+bool FmsSampler::capture_init(double now,const McduScreen& s) {
     complete_pair_=false;
     if(s.contains("TMPY")||s.contains("TEMPY")) {
         status_="MCDU BUSY";return false;
@@ -140,29 +140,34 @@ bool FmsSampler::capture_init(double now,const McduScreen& s,bool alternate) {
         return token.size()==4?endpoint(token).airport:std::string{};
     };
     auto next=plan_;
-    if(alternate) {
-        if(s.line("label2").find("ALTN")==std::string::npos) {status_="NO ALTN FIELD";return false;}
+    pending_={};
+    bool valid=false;
+    if(s.line("label1").find("FROM/TO")!=std::string::npos) {
+        // CO RTE occupies the left of this row. The last slash belongs to FROM/TO.
+        const auto row=s.line("cont1","wgbamy");const auto slash=row.rfind('/');
+        if(slash!=std::string::npos) {
+            const auto from=airport_code(slash>=4?row.substr(slash-4,4):"");
+            const auto to=airport_code(row.substr(slash+1,4));
+            if(!from.empty()||!to.empty()) {
+                valid=true;pending_.observed=true;pending_.origin.airport=from;pending_.destination.airport=to;
+                complete_pair_=!from.empty()&&!to.empty();
+                if(flight_phase_<5&&!from.empty()&&from!=next.origin.airport)next.origin={from,""};
+                if(!to.empty()&&to!=next.destination.airport) {
+                    next.destination={to,""};next.alternate.clear();
+                }
+            }
+        }
+    }
+    // Read ALTN after FROM/TO so a destination change cannot erase this page's alternate.
+    if(s.line("label2").find("ALTN")!=std::string::npos) {
         const auto row=s.line("cont2","wgbamy");
         const auto token=first_token(row.substr(0,row.find('/')));
         const auto code=airport_code(token);
-        if(code.empty()&&token!="----"&&token!="NONE") {status_="NO ALTN FIELD";return false;}
-        next.alternate=code;
-        pending_={};
-    } else {
-        if(s.line("label1").find("FROM/TO")==std::string::npos) {status_="NO FROM/TO FIELD";return false;}
-        // CO RTE occupies the left of this row. The last slash belongs to FROM/TO.
-        const auto row=s.line("cont1","wgbamy");const auto slash=row.rfind('/');
-        if(slash==std::string::npos) {status_="NO FROM/TO FIELD";return false;}
-        const auto from=airport_code(slash>=4?row.substr(slash-4,4):"");
-        const auto to=airport_code(row.substr(slash+1,4));
-        if(from.empty()&&to.empty()) {status_="NO AIRPORTS";return false;}
-        pending_={};pending_.observed=true;pending_.origin.airport=from;pending_.destination.airport=to;
-        complete_pair_=!from.empty()&&!to.empty();
-        if(flight_phase_<5&&!from.empty()&&from!=next.origin.airport)next.origin={from,""};
-        if(!to.empty()&&to!=next.destination.airport) {
-            next.destination={to,""};next.alternate.clear();
+        if(!code.empty()||token=="----"||token=="NONE") {
+            valid=true;next.alternate=code;
         }
     }
+    if(!valid) {status_="NO INIT AIRPORT FIELDS";return false;}
     next.observed=true;
     next.reason=next.origin.airport.empty()&&next.destination.airport.empty()?"AIRPORTS UNAVAILABLE":
         next.origin.runway.empty()||next.destination.runway.empty()?"AIRPORTS / RUNWAY UNAVAILABLE":"CONNECTED";

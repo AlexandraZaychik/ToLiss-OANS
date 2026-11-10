@@ -108,6 +108,8 @@ std::vector<IndexEntry> filter_airport_index(const std::vector<IndexEntry>& inde
 std::optional<IndexEntry> find_airport(const std::vector<IndexEntry>& index,const std::string& code);
 constexpr double airport_search_radius = 40 * 1852.0; // 40 nautical miles, in metres.
 std::optional<IndexEntry> nearest(const std::vector<IndexEntry>& index,double lat,double lon,double radius=airport_search_radius);
+// Reuse canonical_index output (optionally filtered); skips per-query deduplication.
+std::optional<IndexEntry> nearest_canonical(const std::vector<IndexEntry>& index,double lat,double lon,double radius=airport_search_radius);
 // Projective mapping: corners are top left, top right, bottom right, bottom left.
 struct Homography {
     std::array<double,9> h{};

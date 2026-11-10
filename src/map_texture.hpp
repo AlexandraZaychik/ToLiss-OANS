@@ -3,7 +3,7 @@
 #include "map_reprojection.hpp"
 
 namespace oans {
-// An opaque black-backed map: RGB is already composited with its antialiasing.
+// Surfaces use opaque black; the optional label layer stores premultiplied alpha.
 // Draw at gain=1 into the FBO, then apply the current display brightness once.
 class MapTexture {
     using Bind=void(APIENTRY*)(GLenum,GLuint);
@@ -14,6 +14,7 @@ class MapTexture {
     GLContext context_=nullptr;
     std::uint64_t generation_=0;
     bool valid_=false;
+    bool transparent_=false;
 public:
     void invalidate(){valid_=false;}
     void release() {
@@ -25,10 +26,13 @@ public:
         texture_=fbo_=0;context_=nullptr;valid_=false;
     }
     bool update(const std::vector<A350Vertex>& vertices,GLuint atlas,std::uint64_t generation,
-                void(*allocate)(int*,int)) {
+                void(*allocate)(int*,int),bool transparent=false) {
         if(!current_gl_context())return false;
         if(context_!=current_gl_context())release();
-        if(valid_&&generation_==generation)return true;
+        if(valid_&&generation_==generation&&transparent_==transparent)return true;
+        using BlendSeparate=void(APIENTRY*)(GLenum,GLenum,GLenum,GLenum);
+        auto blend_separate=gl_proc<BlendSeparate>("glBlendFuncSeparate");
+        if(transparent&&!blend_separate)return false;
         auto bind=gl_proc<Bind>("glBindFramebuffer");
         auto gen=gl_proc<Gen>("glGenFramebuffers");
         auto attach=gl_proc<Attach>("glFramebufferTexture2D");
@@ -63,23 +67,25 @@ public:
             glViewport(0,0,1024,1024);glDisable(GL_SCISSOR_TEST);glDisable(GL_STENCIL_TEST);
             glDisable(GL_DEPTH_TEST);glDisable(GL_CULL_FACE);glDisable(GL_ALPHA_TEST);
             glColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);
-            glClearColor(0,0,0,1);glClear(GL_COLOR_BUFFER_BIT);
-            // Keep alpha opaque: RGB is already antialiased over black. Writing
-            // srcAlpha^2 would blend edge pixels a second time when compositing.
-            glColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_FALSE);
+            glClearColor(0,0,0,transparent?0:1);glClear(GL_COLOR_BUFFER_BIT);
+            // Surfaces keep opaque alpha. Labels accumulate coverage separately
+            // from RGB so antialiased edges composite once over the alert fill.
+            glColorMask(GL_TRUE,GL_TRUE,GL_TRUE,transparent?GL_TRUE:GL_FALSE);
             glMatrixMode(GL_PROJECTION);glPushMatrix();glLoadIdentity();
             glOrtho(-map_texture_margin,600+map_texture_margin,-map_texture_margin,600+map_texture_margin,-1,1);
             glMatrixMode(GL_MODELVIEW);glPushMatrix();glLoadIdentity();
             glEnable(GL_TEXTURE_2D);glBindTexture(GL_TEXTURE_2D,atlas);
             glEnable(GL_BLEND);glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
+            if(transparent)blend_separate(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA,GL_ONE,GL_ONE_MINUS_SRC_ALPHA);
             draw_a350_vertices(vertices);
             glPopMatrix();glMatrixMode(GL_PROJECTION);glPopMatrix();glMatrixMode(mode);
             if(clip)clip(origin,depth);
         }
         bind(0x8CA9,draw);bind(0x8CA8,read);glPopAttrib();
-        valid_=complete;generation_=generation;return valid_;
+        valid_=complete;generation_=generation;transparent_=transparent;return valid_;
     }
     void draw(double gain,void(*bind)(int,int),const A350View& source,const A350View& current) const {
+        glBlendFunc(transparent_?GL_ONE:GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
         bind(static_cast<int>(texture_),0);
         GLint env;glGetTexEnviv(GL_TEXTURE_ENV,GL_TEXTURE_ENV_MODE,&env);
         glTexEnvi(GL_TEXTURE_ENV,GL_TEXTURE_ENV_MODE,GL_MODULATE);
@@ -91,6 +97,7 @@ public:
             glVertex2d(p.x,p.y);
         }
         glEnd();glTexEnvi(GL_TEXTURE_ENV,GL_TEXTURE_ENV_MODE,env);
+        if(transparent_)glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
     }
     static void draw_fallback(const std::vector<A350Vertex>& vertices,double gain,
                               const A350View& source,const A350View& current) {

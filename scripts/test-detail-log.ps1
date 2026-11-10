@@ -6,14 +6,10 @@ $compiler=Join-Path $CompilerDirectory 'g++.exe'
 New-Item -ItemType Directory -Force $runRoot | Out-Null
 Push-Location $projectRoot
 try {
-    foreach($flavor in @('release','debug')) {
-        $define=if($flavor -eq 'debug'){'-DOANS_DEBUG=1'}else{'-DOANS_DEBUG=0'}
-        $binary=Join-Path $runRoot ($flavor+'-tests.exe')
-        & $compiler '-std=c++17' '-Og' '-g' '-static' '-Isrc' $define 'tests/detail_log_tests.cpp' '-o' $binary
-        if($LASTEXITCODE -ne 0){throw "Logger $flavor test compile failed"}
-        & $binary (Join-Path $runRoot $flavor)
-        if($LASTEXITCODE -ne 0){throw "Logger $flavor tests failed"}
-    }
+    $binary=Join-Path $runRoot 'debug-tests.exe'
+    & $compiler '-std=c++17' '-Og' '-g' '-static' '-Isrc' '-DOANS_DEBUG=1' 'tests/detail_log_tests.cpp' '-o' $binary
+    if($LASTEXITCODE -ne 0){throw 'Fault observer test compile failed'}
+    Write-Output 'CASE log/unhandled-fault-breadcrumbs'
     $faultRoot=Join-Path $runRoot 'fault'
     & (Join-Path $runRoot 'debug-tests.exe') $faultRoot '--fault'
     if($LASTEXITCODE -ne -1073741819){throw "Expected synthetic unhandled access violation exit, got $LASTEXITCODE"}

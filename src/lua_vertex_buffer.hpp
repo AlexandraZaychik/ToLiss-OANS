@@ -5,18 +5,29 @@ extern "C" {
 #include "lauxlib.h"
 }
 #include <cmath>
+#include <algorithm>
+#include <limits>
 #include <stdexcept>
 
 namespace oans {
 // Lua keeps all upstream geometry arithmetic. Each call only expands a primitive
 // into the original triangle order, directly in a contiguous native buffer.
 class LuaVertexBuffer {
-    static constexpr size_t limit=180000;
+    size_t limit_=180000;
     std::vector<A350Vertex> data_;
     static LuaVertexBuffer& target(lua_State* L,int args,size_t count) {
         auto& self=*static_cast<LuaVertexBuffer*>(lua_touserdata(L,lua_upvalueindex(1)));
         luaL_argcheck(L,lua_gettop(L)==args,1,"invalid vertex batch arguments");
-        luaL_argcheck(L,self.data_.size()+count<=limit,1,"vertex buffer capacity exceeded");
+        luaL_argcheck(L,count==0||(count<=self.limit_&&self.data_.size()<=self.limit_-count),1,"vertex buffer capacity exceeded");
+        // Ultra has no fixed geometry cap. Grow before emitting a complete batch;
+        // report allocation failure through Lua without unwinding across pcall.
+        bool allocated=true;
+        if(self.data_.size()+count>self.data_.capacity()) {
+            try {self.data_.reserve(std::max(self.data_.size()+count,
+                std::min(self.limit_,self.data_.capacity()*2)));}
+            catch(const std::exception&) {allocated=false;}
+        }
+        if(!allocated)luaL_error(L,"vertex buffer allocation failed");
         return self;
     }
     static float scalar(lua_State* L,int i) {
@@ -69,9 +80,11 @@ class LuaVertexBuffer {
         return 0;
     }
 public:
-    // Allocate outside Lua callbacks, so neither C++ allocation exceptions nor
-    // a vector reallocation can cross Lua's longjmp error boundary.
-    LuaVertexBuffer(){data_.reserve(limit);}
+    LuaVertexBuffer(){data_.reserve(limit_);}
+    void detail_quality(int quality) {
+        limit_=quality==0?std::numeric_limits<size_t>::max():quality==1?270000:180000;
+        if(quality==1)data_.reserve(limit_);
+    }
     void bind(lua_State* L) {
         const std::pair<const char*,lua_CFunction> functions[]={
             {"native_draw_reset",reset},{"native_draw_tri",triangle},{"native_draw_quad",quad},

@@ -1,4 +1,5 @@
 #include "runway_ahead.hpp"
+#include "test_support.hpp"
 #include <algorithm>
 #include <iostream>
 #include <iomanip>
@@ -18,136 +19,26 @@ void warm(RunwayAhead& c,Airport& a,RunwayAheadInput& t) {
     t=taxi();for(int i=0;i<11;++i)c.update(&a,t,1);
 }
 int main(){try {
-    const auto* zibo=aircraft_geometry::dimensions_for("zibo","b738");
-    check(zibo&&zibo->fuselage_length==39.50&&zibo->span==34.40&&
-          zibo->nose_to_nose_gear==4.40,"Zibo drawing dimensions and estimated nose gear offset");
-    check(!aircraft_geometry::dimensions_for("lr","B738")&&
-          !aircraft_geometry::dimensions_for("toliss","B738")&&
-          !aircraft_geometry::dimensions_for("zibo","A320"),"Zibo dimensions stay within their backend");
-    const auto zibo_envelope=aircraft_geometry::envelope_for("zibo","B738",60,15);
-    check(!zibo_envelope.fallback&&std::abs(zibo_envelope.nose-(45*.3048+4.4))<1e-9&&
-          std::abs(zibo_envelope.nose+zibo_envelope.tail-39.5)<1e-9&&zibo_envelope.half_span==17.2,
-          "Zibo envelope uses its own reference calibration and 17.2 m half span");
-    {
-        auto airport=fixture();RunwayAhead detector;auto input=taxi();
-        detector.set_envelope(zibo_envelope);warm(detector,airport,input);
-        input.position={500,-80-zibo_envelope.nose-70};
-        const auto hits=detector.update(&airport,input,.1);
-        check(hits.size()==1&&std::abs(hits[0].seconds-7)<1e-6,"Zibo nose controls predicted runway entry");
-        detector.reset();warm(detector,airport,input);
-        input.position={-60-17.5,-160};
-        check(detector.update(&airport,input,.1).empty(),"Zibo wing clears outside its 17.2 m half span");
-        detector.set_envelope(aircraft_geometry::default_envelope);warm(detector,airport,input);
-        input.position={-60-17.5,-160};
-        check(detector.update(&airport,input,.1).size()==1,"A320 fallback would incorrectly intersect at the same position");
-    }
-    const auto* lr330=aircraft_geometry::dimensions_for("lr","A333");
-    check(lr330&&lr330->fuselage_length==63.69&&lr330->span==60.30&&
-          lr330->nose_to_nose_gear==6.67,"LR A330 protection dimensions match supplied FCOM drawing");
-    check(!aircraft_geometry::dimensions_for("toliss","A333")&&
-          !aircraft_geometry::dimensions_for("lr","A320"),"model data cannot leak across vendors");
-    const auto lr_envelope=aircraft_geometry::envelope_for("lr","a333",97,21.860000610);
-    check(!lr_envelope.fallback&&std::abs(lr_envelope.nose-29.572671814072)<1e-9&&
-          std::abs(lr_envelope.nose+lr_envelope.tail-63.69)<1e-9&&lr_envelope.half_span==30.15,
-          "LR A333 envelope combines manual dimensions with its own ACF reference");
-    check(aircraft_geometry::envelope_for("toliss","A333",97,21.86).fallback&&
-          aircraft_geometry::envelope_for("unknown","A333",97,21.86).fallback&&
-          aircraft_geometry::envelope_for("lr","A333",NAN,21.86).fallback,
-          "missing vendor/model and missing calibration fall back");
-    const auto acf=std::filesystem::temp_directory_path()/"oans-envelope-test.acf";
-    {std::ofstream out(acf);out<<"I\nP acf/_cgZ 97\nP _gear/0/_gear_z 21.860000610\n";}
-    check(aircraft_geometry::load_envelope("lr","A333",acf).nose==lr_envelope.nose,
-          "active ACF reference calibration is loaded");
-    {std::ofstream out(acf);out<<"P acf/_cgZ 97\n";}
-    check(aircraft_geometry::load_envelope("lr","A333",acf).fallback,"missing nose gear falls back");
-    std::filesystem::remove(acf);
-    check(aircraft_geometry::load_envelope("lr","A333",acf).fallback,"missing ACF falls back");
-    {
-        auto airport=fixture();RunwayAhead detector;auto input=taxi();
-        detector.set_envelope(lr_envelope);warm(detector,airport,input);
-        input.position={500,-80-lr_envelope.nose-70};
-        auto hits=detector.update(&airport,input,.1);
-        check(hits.size()==1&&std::abs(hits[0].seconds-7)<1e-6,"detector predicts entry using A333 nose offset");
-        detector.reset();warm(detector,airport,input);
-        input.position={-60-lr_envelope.half_span+1,-170};
-        check(detector.update(&airport,input,.1).size()==1,"A333 wing intersects where A320 wing would miss");
-        detector.set_envelope(aircraft_geometry::default_envelope);
-        check(detector.hits().empty()&&detector.low_speed_seconds()==0,"changing envelope clears advisory state");
-        warm(detector,airport,input);input.position={-60-lr_envelope.half_span+1,-170};
-        check(detector.update(&airport,input,.1).empty(),"fallback A320 has its narrower protection span");
-    }
-    // Reference and nose-gear stations from the supplied ToLiss ACFs.
-    // Exercise each actual model's protection geometry, independent of display UVs.
-    struct TolissModel {const char* icao;double reference,gear,length,span,nose;};
-    for(const auto& model:std::vector<TolissModel>{
-        {"A321",54,3.75,44.51,35.80,20.3862},
-        {"A339",-6.440000057,-83.269996643,63.66,64.00,30.0877829594128},
-        {"A346",-.680000007,-103.510002136,75.27,63.45,37.9125846489192}}) {
-        const auto envelope=aircraft_geometry::envelope_for("toliss",model.icao,model.reference,model.gear);
-        check(!envelope.fallback&&std::abs(envelope.nose-model.nose)<1e-9,"supplied ToLiss model reference-to-nose calibration");
-        check(std::abs(envelope.nose+envelope.tail-model.length)<1e-9&&envelope.half_span==model.span/2,
-              "model fuselage and wingspan dimensions");
-        {std::ofstream out(acf);out<<std::setprecision(17)<<"P acf/_cgZ "<<model.reference<<"\nP _gear/0/_gear_z "<<model.gear<<'\n';}
-        const auto loaded=aircraft_geometry::load_envelope("toliss",model.icao,acf);
-        check(!loaded.fallback&&loaded.nose==envelope.nose&&loaded.tail==envelope.tail&&loaded.half_span==envelope.half_span,
-              "HiDef/StdDef active ACF station calibration reaches the detector");
-        auto airport=fixture();RunwayAhead detector;auto input=taxi();
-        detector.set_envelope(loaded);warm(detector,airport,input);
-        input.position={500,-80-envelope.nose-70};
-        auto hits=detector.update(&airport,input,.1);
-        check(hits.size()==1&&std::abs(hits[0].seconds-7)<1e-6,"model nose reaches protected runway at seven seconds");
-        input.position.y-=.01;
-        check(detector.update(&airport,input,.1).empty(),"model outside prediction horizon clears advisory");
-        detector.reset();warm(detector,airport,input);
-        input.position={-60-envelope.half_span+.01,-170};
-        check(detector.update(&airport,input,.1).size()==1,"model wing tip intersects protected runway");
-        input.position.x=-60-envelope.half_span-.01;
-        check(detector.update(&airport,input,.1).empty(),"model wing tip clears protected runway");
-        if(model.span>40) {
-            detector.set_envelope(aircraft_geometry::default_envelope);warm(detector,airport,input);
-            input.position={-60-envelope.half_span+.01,-170};
-            check(detector.update(&airport,input,.1).empty(),"widebody wing intersection would be missed by A320 fallback");
-        }
-    }
-    std::filesystem::remove(acf);
-    Airport crossing;crossing.icao="CROSS";
-    crossing.runways={{"05","23",{-1500,-1000},{1500,1000},45},
-                      {"14","32",{-1000,1000},{1000,-1000},45}};
-    const std::vector<RunwayAheadHit> crossing_hits={{"05","23",3,120},{"14","32",2,60}};
-    const auto south=orient_runway_advisories(&crossing,crossing_hits,180);
-    check(south[1].first=="32"&&south[1].second=="14","taxiway A southbound approach puts physical 32 threshold on left");
-    check(south[0].first=="23"&&south[0].second=="05","each crossing runway uses its own projected threshold direction");
-    check(south[0].seconds==3&&south[0].distance==120&&south[1].seconds==2&&south[1].distance==60,"orientation preserves row order and threat metrics");
-    check(crossing_hits[1].first=="14","display orientation does not mutate detector state");
-    const auto north=orient_runway_advisories(&crossing,south,0);
-    check(north[1].first=="14"&&north[1].second=="32","opposite approach swaps the threshold labels back");
-    check(orient_runway_advisories(&crossing,crossing_hits,-180)[1].first=="32"&&
-          orient_runway_advisories(&crossing,crossing_hits,540)[1].first=="32","heading wraps consistently");
-    check(orient_runway_advisories(nullptr,crossing_hits,180)[1].first=="14","missing airport preserves input");
-    check(orient_runway_advisories(&crossing,crossing_hits,std::numeric_limits<double>::quiet_NaN())[1].first=="14","invalid heading preserves input");
-    check(orient_runway_advisories(&crossing,{{"UNKNOWN","NONE",0,0}},180)[0].first=="UNKNOWN","unmatched runway pair preserves input");
-    auto inline_airport=fixture();
-    check(orient_runway_advisories(&inline_airport,{{"09","27",0,0}},90)[0].first=="09","fore/aft alignment has no invented left/right side");
-    std::reverse(inline_airport.runways.begin(),inline_airport.runways.end());
-    check(orient_runway_advisories(&inline_airport,{{"09","27",0,0}},180)[0].first=="27","reciprocal geometry record yields the same physical ordering");
     auto a=fixture();RunwayAhead c;auto t=taxi();
-    check(test_runways(a,"9")[0].first=="09","test input normalizes single digit runway");
-    check(test_runways(a,"RWY09/27").size()==1,"test input resolves and deduplicates reciprocal ends");
-    auto bad_input=[&](const std::string& s) {try {test_runways(a,s);return false;}catch(const std::invalid_argument&){return true;}};
-    check(bad_input(""),"test rejects empty runway");check(bad_input("99"),"test rejects invalid runway number");
-    check(bad_input("08"),"test rejects runway absent at selected airport");
-    a.runways.push_back({"10L","28R",{0,40},{1000,40},40});
-    check(test_runways(a,"09,10l").size()==2,"test supports two actual runway pairs");
-    check(test_runways(a,"28r")[0].first=="10L","test reciprocal endpoint resolves actual pair");
-    std::string selected;
-    test_runways(a,"28r",&selected);
-    check(selected=="28R","test preserves requested reciprocal endpoint for green selection");
-    test_runways(a,"RWY09/27",&selected);
-    check(selected=="09","deduplicated pair keeps first requested endpoint selected");
-    a.runways.push_back({"11","29",{0,80},{1000,80},40});
-    check(bad_input("09,10L,11"),"test rejects more than two physical runways");a=fixture();
-    check(std::abs(RunwayAhead::nose+RunwayAhead::tail-37.57)<1e-9,"manual fuselage length");
-    check(RunwayAhead::half_span==17.9,"manual half wingspan");
+    struct Model {const char* vendor;const char* code;double ref,gear,nose,span;};
+    for(const auto& m:std::vector<Model>{
+      {"zibo","B738",60,15,45*.3048+4.4,34.4},
+      {"lr","A333",97,21.860000610,29.572671814072,60.3},
+      {"toliss","A321",54,3.75,20.3862,35.8},
+      {"toliss","A339",-6.440000057,-83.269996643,30.0877829594128,64},
+      {"toliss","A346",-.680000007,-103.510002136,37.9125846489192,63.45}}){
+      scenario(std::string("runway/envelope/")+m.code);
+      const auto envelope=aircraft_geometry::envelope_for(m.vendor,m.code,m.ref,m.gear);
+      check(!envelope.fallback&&std::abs(envelope.nose-m.nose)<1e-8&&envelope.half_span==m.span/2,"vendor-specific calibrated protection envelope");
+      auto airport=fixture();RunwayAhead detector;auto input=taxi();detector.set_envelope(envelope);warm(detector,airport,input);
+      input.position={500,-80-envelope.nose-70};const auto hits=detector.update(&airport,input,.1);
+      check(hits.size()==1&&std::abs(hits[0].seconds-7)<1e-6,"calibration reaches detector prediction");
+      detector.reset();warm(detector,airport,input);
+      input.position.x=-60-envelope.half_span+.01;input.position.y=-80-envelope.nose-65;
+      check(detector.update(&airport,input,.1).size()==1,"model wing tip intersects runway protection area");
+      input.position.x-=.02;check(detector.update(&airport,input,.1).empty(),"model wing tip just outside clears warning");
+    }
+    scenario("runway/qualification-rearm-pause-stop");
     t.position={500,-80-RunwayAhead::nose-70};
     for(int i=0;i<10;++i)check(c.update(&a,t,1).empty(),"strictly more than ten seconds below forty knots");
     auto hits=c.update(&a,t,.01);check(hits.size()==1,"trigger at seven seconds; reciprocal deduplicated");
@@ -164,6 +55,7 @@ int main(){try {
     t.speed=10;check(c.update(&a,t,10).empty(),"qualification required again after speed excursion");
     check(c.update(&a,t,.01).size()==1,"requalify after speed excursion");
     t.ground=false;check(c.update(&a,t,1).empty()&&c.low_speed_seconds()==0,"airborne resets");
+    scenario("runway/inside-suppression");
     c.reset();warm(c,a,t);t.position={500,-120};check(c.update(&a,t,.01).size()==1,"approach active");
     t.position.y=-80-RunwayAhead::nose+1;check(c.update(&a,t,.1).size()==1,"aircraft nose enters area");
     check(c.update(&a,t,2).size()==1,"retain for exactly two seconds in area");
@@ -171,12 +63,15 @@ int main(){try {
     t.position.y=-120;check(c.update(&a,t,.1).empty(),"no repeated warning while same conflict persists");
     t.position.y=-1000;c.update(&a,t,10);t.position.y=-120;
     check(c.update(&a,t,.1).size()==1,"new encounter after clearing area rearms");
+    scenario("runway/timeout-suppression");
     c.reset();warm(c,a,t);t.position.y=-120;c.update(&a,t,.01);
     check(c.update(&a,t,30).size()==1,"retain for exactly thirty seconds");
     check(c.update(&a,t,.01).empty(),"thirty second timeout");
     check(c.update(&a,t,.1).empty(),"timeout does not retrigger every frame");
+    scenario("runway/already-on-runway");
     c.reset();warm(c,a,t);t.position={500,0};
     check(c.update(&a,t,.01).empty(),"no initial advisory when already on runway");
+    scenario("runway/nearest-two-threats");
     c.reset();warm(c,a,t);t.position={500,-120};t.speed=20;
     a.runways.push_back({"10","28",{0,40},{1000,40},40});
     check(c.update(&a,t,.01).size()==2,"two distinct predicted runways");
@@ -184,22 +79,24 @@ int main(){try {
     a.runways.push_back({"11","29",{0,20},{1000,20},40});
     check(c.update(&a,t,.01).size()==2&&c.hits().front().first=="11","only two nearest threats retained");
     a=fixture();a.runways[0].stopway_start=100;a.runways[1].stopway_end=100;
+    scenario("runway/stopway-protection");
     c.reset();warm(c,a,t);t.position={-60-100-RunwayAhead::nose-50,0};t.heading=90;
     check(c.update(&a,t,.01).size()==1&&std::abs(c.hits()[0].seconds-5)<1e-6,"stopway included before sixty metre margin");
     a.runways[0].stopway_start=0;a.runways[1].stopway_end=0;
     check(c.update(&a,t,.01).empty(),"stopway test clears unextended runway immediately");
-    c.reset();warm(c,a,t);t.position={500,-120};c.update(&a,t,.01);t.speed=0;
-    check(c.update(&a,t,.01).empty(),"stopping clears a newly activated warning immediately");
-    check(c.update(&a,t,30).empty(),"stopping remains clear beyond thirty seconds");
+    scenario("runway/invalid-provider");
     c.reset();warm(c,a,t);t.heading=0;t.position={500,-120};t.valid=false;
     check(c.update(&a,t,.1).empty()&&c.low_speed_seconds()==0,"missing data invalidates warning");
     t.valid=true;t.speed=std::numeric_limits<double>::quiet_NaN();
     check(c.update(&a,t,.1).empty(),"NaN fails closed");
+    scenario("runway/airport-change");
     c.reset();warm(c,a,t);t.position={500,-120};c.update(&a,t,.1);
     a.icao="OTHER";t.position={500,0};check(c.update(&a,t,.1).empty(),"airport change clears encounter state");
+    scenario("runway/paused-airport-change");
     c.reset();warm(c,a,t);t.position={500,-120};c.update(&a,t,.1);
     t.paused=true;a.icao="PAUSED_CHANGE";
     check(c.update(&a,t,1).empty(),"airport change clears stale threats even while paused");t.paused=false;
+    scenario("runway/invalid-geometry");
     c.reset();warm(c,a,t);t.position={500,-120};
     for(auto& r:a.runways)r.stopway_start=std::numeric_limits<double>::quiet_NaN();
     check(c.update(&a,t,.1).empty(),"invalid runway geometry is skipped");

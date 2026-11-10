@@ -139,6 +139,9 @@ void fms_command(const std::string& name) {
     if(name=="AirbusFBW/MCDU2LSK4L"&&fms_page=="DATA")fms_screen("IDENT");
 }
 extern "C" {
+static void (*disable_callback)()=nullptr;
+__declspec(dllexport) void MockSetDisableCallback(void (*callback)()) {disable_callback=callback;}
+void XPLMDisablePlugin(XPLMPluginID) {if(disable_callback)disable_callback();}
 __declspec(dllexport) void MockAircraftProvider(int available) {aircraft_provider_available=toliss_signatures_available=available!=0;}
 __declspec(dllexport) void MockTolissSignatures(int available) {toliss_signatures_available=available!=0;}
 __declspec(dllexport) void MockAircraftUiName(const char* name) {aircraft_ui_name=name;}
@@ -202,6 +205,8 @@ XPLMDataRef XPLMFindDataRef(const char* name) {
     if(n.find("speedbrake1")!=std::string::npos) {d.values.resize(8);d.type=xplmType_FloatArray;}
     if(n.find("DUBrightness")!=std::string::npos) {d.values.assign(8,1);d.type=xplmType_FloatArray;}
     if(n=="sim/cockpit2/switches/instrument_brightness_ratio") {d.values.assign(32,1);d.type=xplmType_FloatArray;}
+    if(n=="sim/cockpit2/switches/beacon_on")d.type=xplmType_Int;
+    if(n=="sim/cockpit2/switches/landing_lights_switch") {d.values.assign(16,0);d.type=xplmType_FloatArray;}
     if(n.find("bus_volts")!=std::string::npos) {d.values.assign(2,28);d.type=xplmType_FloatArray;}
     if(n.find("matrix")!=std::string::npos) {d.values.resize(16);d.type=xplmType_FloatArray;}
     if(n=="sim/cockpit2/tcas/targets/modeS_id") {d.values.assign(64,0);d.type=xplmType_IntArray;}
@@ -285,6 +290,12 @@ XPLMPluginID XPLMGetMyID() {return 42;}
 void XPLMGetVersions(int* xp,int* sdk,XPLMHostApplicationID* host) {*xp=120000;*sdk=400;*host=xplm_Host_XPlane;}
 void XPLMGetPluginInfo(XPLMPluginID,char*,char* path,char*,char*) {if(path)std::strcpy(path,plugin_path.c_str());}
 void XPLMEnableFeature(const char*,int) {}
+static XPLMLanguageCode mock_language=xplm_Language_English;
+__declspec(dllexport) void MockSetLanguage(int language) {mock_language=static_cast<XPLMLanguageCode>(language);}
+XPLMLanguageCode XPLMGetLanguage() {return mock_language;}
+void XPLMSetMenuItemName(XPLMMenuID menu,int index,const char* label,int) {
+    for(size_t i=0;i<menu_items.size();++i)if(item_menus[i]==menu&&item_local_indices[i]==index)menu_items[i].first=label;
+}
 XPLMMenuID XPLMFindPluginsMenu() {return reinterpret_cast<void*>(1);}
 XPLMMenuID XPLMCreateMenu(const char*,XPLMMenuID,int,XPLMMenuHandler_f handler,void*) {menu_handler=handler;return reinterpret_cast<void*>(next_menu++);}
 void XPLMDestroyMenu(XPLMMenuID menu) {menu_sizes.erase(menu);

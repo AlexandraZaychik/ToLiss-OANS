@@ -186,6 +186,14 @@ UiFrame nd_controls(const UiState& s,const UiModel& m) {
         else lift(c.box);
     }
     for(auto& t:f.texts)t.at.y+=m.bottom_inset;
+    if(m.scale_button) {
+        // Status row: right aligned; otherwise above the left menu toggle.
+        const double size=m.bottom_inset>0?m.bottom_inset-1-stus_bar_safe_bottom:32;
+        const double x=m.bottom_inset>0?600-2*size-4:0;
+        const double y=m.bottom_inset>0?stus_bar_safe_bottom:114;
+        button({x,y,x+size,y+size},"+",UiAction::zoom_in,0,s.range_nm>.2);
+        button({x+size+4,y,x+2*size+4,y+size},"-",UiAction::zoom_out,0,s.range_nm<5);
+    }
     if(s.menu) {
         const double x=s.menu_at.x,top=s.menu_at.y;
         f.backgrounds.push_back({x,top-6*32,x+210,top});

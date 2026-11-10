@@ -1,0 +1,43 @@
+20261024-1325Z update\
+~ align menu to real A320 oans, thanks to CHOXON2CHOXOFF (awesome video)\
+~ small improve
+
+20261025-0258Z update\
+~ exp. support other tls\
+~ small improve
+
+20261025-1031Z update\
+~ small improve
+
+20261025-1332Z update\
+~ support A319/321/346/339, thanks to KILO_333167 (other plane config file)\
+~ small improve
+
+20261026-0303Z update\
+~ higher performance\
+~ current position [option]\
+~ small improve
+
+20261027-1352Z update\
+~ small improve
+
+20261029-0609Z update\
+~ mac support, thanks to heart4sck (test)\
+~ small improve, thanks to ricardo404 (idea, test)
+
+20261102-1050Z update\
+~ lr330 support
+
+20261104-1123Z update\
+~ zibo737 support\
+~ small improve\
+~ route highlight
+
+20261107-1305Z update\
+~ small improve\
+~ fix bug
+
+20261108-1520Z update\
+~ support old version toliss\
+~ small improve\
+~ fix bug

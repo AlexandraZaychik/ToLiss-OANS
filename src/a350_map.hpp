@@ -26,6 +26,7 @@ struct A350View {
     bool outside_plan=false;
     bool position_valid=true;
     bool simple_stand_names=true;
+    int detail_quality=4; // 0=ultra, 1=max, 2=xhigh, 3=high, 4=medium, 5=low
     bool reusable_with(const A350View& o) const;
     bool same_map_content(const A350View& o) const;
     bool base_reusable_with(const A350View& o) const;
@@ -55,6 +56,10 @@ public:
     const std::vector<A350Vertex>& render_base(int side,const A350View& view,double now,bool interactive=false,
                                               std::int64_t frame=-1);
     const A350View& base_view(int side) const;
+    // Static labels share the base generation/pose; composite after alert fill.
+    const std::vector<A350Vertex>& base_labels(int side) const;
+    // Borrowed side-3 output, consumed before any other dynamic render call.
+    const std::vector<A350Vertex>& render_alert_fill(const A350View& view);
     // Borrowed output remains valid until the next call to the same method
     // (or render/render_base side 3 for dynamic). Other output buffers are independent.
     const std::vector<A350Vertex>& render_dynamic(const A350View& view);

@@ -31,11 +31,12 @@ public:
     void consult(const std::string& airport) {last_consulted_=airport;}
     void reset() {last_consulted_.clear();}
     const std::string& last_consulted() const {return last_consulted_;}
+    // The host supplies its canonical, aircraft-filtered airport index.
     std::optional<IndexEntry> select_airborne_open(const std::vector<IndexEntry>& index,const FmsPlan& plan,
                                                    double lat,double lon) const {
         if(auto selected=find_airport(index,last_consulted_))return selected;
         if(plan.observed)if(auto dest=find_airport(index,plan.destination.airport))return dest;
-        return nearest(index,lat,lon);
+        return nearest_canonical(index,lat,lon);
     }
     std::optional<IndexEntry> select(const std::vector<IndexEntry>& index,const FmsPlan& plan,
                                      double lat,double lon,bool enroute) const {

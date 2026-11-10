@@ -239,6 +239,54 @@ end'''),
     take(4814, 4858, 'OANS checkbox layout and drawing')
     take(5053, 5061, 'map drawing budget')
     take(5223, 5753, 'projection setup, surfaces, buildings and runways', [
+        ('    local pave_L, pave_lim, pave_i = lod, 0, 1',
+         '''    -- Quality affects pavement geometry only; markings keep the upstream LOD.
+    local quality = C.detail_quality or 4
+    local pave_lod = quality <= 2 and 3 or (quality == 5 and 1 or
+        (quality == 3 and ((C.rng >= 0.2) and 2 or 3) or
+        ((C.rng >= 1) and 1 or ((C.rng >= 0.2) and 2 or 3))))
+    local pave_factor = quality == 0 and math.huge or (quality == 1 and 1.5 or 1)
+    local pave_L, pave_lim, pave_i = pave_lod, 0, 1
+    local pave_base_lim = 0'''),
+        ('''            local room = (BULK - DL.n) * 0.45
+            local L = lod
+            while L > 1 do
+                local nv = 0
+                for _, gp in ipairs(G.polys) do
+                    if in_view(gp.minx, gp.miny, gp.maxx, gp.maxy) then
+                        nv = nv + count_tris(gp[FILL[L]]) + count_tris(gp[HOLE[L]])
+                    end
+                end
+                if nv <= room then break end
+                L = L - 1
+            end
+            pave_L = L
+            pave_lim = math.max(DL.n + room, BULK * 0.5)''',
+         '''            -- Keep the selected geometry level even under budget pressure.
+            -- Extra pavement allowance must not consume other layers' budgets.
+            pave_base_lim = math.max(DL.n + (BULK - DL.n) * 0.45, BULK * 0.5)
+            pave_lim = pave_factor == math.huge and math.huge or
+                DL.n + (pave_base_lim - DL.n) * pave_factor'''),
+        ('''            end
+            return true
+        end
+        -- keine Flaechen in den Daten''',
+         '''            end
+            DL.n = math.min(DL.n, pave_base_lim)
+            return true
+        end
+        -- keine Flaechen in den Daten'''),
+        ('''            stroke({ (pave_L == 1) and G.pave_c or ((pave_L == 2) and G.pave_m or G.pave) }, MC.shoulder, (sc >= 0.6) and 2 or 1,
+                (pave_L == 1) and 100 or md2, (BULK - DL.n) * 0.2)''',
+         '''            local before = DL.n
+            local room = math.max(0, BULK - before) * 0.2
+            local allowance = pave_factor == math.huge and math.huge or room * pave_factor
+            local distance2 = (pave_L == 1) and 100 or ((pave_L == 2) and 16 or 9)
+            stroke({ (pave_L == 1) and G.pave_c or ((pave_L == 2) and G.pave_m or G.pave) }, MC.shoulder, (sc >= 0.6) and 2 or 1,
+                distance2, allowance)
+            DL.n = math.min(DL.n, before + room)'''),
+        ('draw_tris(gp[HOLE[L]], MC.bg, pave_lim + 4000)',
+         'draw_tris(gp[HOLE[L]], MC.bg, pave_lim + 4000 * pave_factor)'),
         ('-- Gebaeude: aus OpenStreetMap (Terminals cyan, andere blau) - sonst optional geschaetzte Terminals',
          '-- Gebaeude: aus dem Cache (Terminals cyan, andere blau) - sonst optional geschaetzte Terminals'),
         ('if G.osm then', 'if G.buildings then'),

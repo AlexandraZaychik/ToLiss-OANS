@@ -1,0 +1,402 @@
+[
+  {
+    "id": "airport/parse-index-load",
+    "module": "Airport and route"
+  },
+  {
+    "id": "airport/runway-pair-filter",
+    "module": "Airport and route"
+  },
+  {
+    "id": "airport/surface-tracker-crossing",
+    "module": "Airport and route"
+  },
+  {
+    "id": "display/lr-missing-interface",
+    "module": "Display isolation"
+  },
+  {
+    "id": "display/lr-navigation-validity",
+    "module": "Display isolation"
+  },
+  {
+    "id": "display/lr-power-isolation",
+    "module": "Display isolation"
+  },
+  {
+    "id": "display/lr-range-side-isolation",
+    "module": "Display isolation"
+  },
+  {
+    "id": "display/zibo-missing-interface",
+    "module": "Display isolation"
+  },
+  {
+    "id": "display/zibo-navigation-validity",
+    "module": "Display isolation"
+  },
+  {
+    "id": "display/zibo-power-isolation",
+    "module": "Display isolation"
+  },
+  {
+    "id": "display/zibo-range-side-isolation",
+    "module": "Display isolation"
+  },
+  {
+    "id": "dsf/airport-filter-ownership",
+    "module": "DSF"
+  },
+  {
+    "id": "dsf/binary-priority-disabled",
+    "module": "DSF"
+  },
+  {
+    "id": "dsf/cancellation",
+    "module": "DSF"
+  },
+  {
+    "id": "dsf/curved-pool",
+    "module": "DSF"
+  },
+  {
+    "id": "dsf/facade-exclusion",
+    "module": "DSF"
+  },
+  {
+    "id": "dsf/invalid-file-clears-cache",
+    "module": "DSF"
+  },
+  {
+    "id": "dsf/invalid-pool-index",
+    "module": "DSF"
+  },
+  {
+    "id": "dsf/invalid-vertex-index",
+    "module": "DSF"
+  },
+  {
+    "id": "dsf/truncated-atom",
+    "module": "DSF"
+  },
+  {
+    "id": "dsf/truncated-pool",
+    "module": "DSF"
+  },
+  {
+    "id": "gl/consecutive-textured-panels",
+    "module": "Rendering and UI"
+  },
+  {
+    "id": "gl/inherited-shader",
+    "module": "Rendering and UI"
+  },
+  {
+    "id": "gl/large-cockpit-uv",
+    "module": "Rendering and UI"
+  },
+  {
+    "id": "gl/reversed-cockpit-uv",
+    "module": "Rendering and UI"
+  },
+  {
+    "id": "log/unhandled-fault-breadcrumbs",
+    "module": "Logging"
+  },
+  {
+    "id": "lr/fms/automatic-phase-gate-and-latch",
+    "module": "FMS"
+  },
+  {
+    "id": "lr/fms/crew-interruption",
+    "module": "FMS"
+  },
+  {
+    "id": "lr/fms/cross-page-route-change",
+    "module": "FMS"
+  },
+  {
+    "id": "lr/fms/direct-init-independent-of-automation",
+    "module": "FMS"
+  },
+  {
+    "id": "lr/fms/empty-plan-clears-stale-data",
+    "module": "FMS"
+  },
+  {
+    "id": "lr/fms/partial-pair-and-flight-phase",
+    "module": "FMS"
+  },
+  {
+    "id": "lr/fms/scratchpad-retry-budget",
+    "module": "FMS"
+  },
+  {
+    "id": "lr/fms/temporary-fpln-rejected",
+    "module": "FMS"
+  },
+  {
+    "id": "lr/fms/temporary-init-rejected",
+    "module": "FMS"
+  },
+  {
+    "id": "lr/fms/unverified-lsk-restore",
+    "module": "FMS"
+  },
+  {
+    "id": "lr/fms/verified-ident-transaction",
+    "module": "FMS"
+  },
+  {
+    "id": "lr/screen-adapter",
+    "module": "FMS"
+  },
+  {
+    "id": "lua/capacity-count-reset",
+    "module": "Rendering and UI"
+  },
+  {
+    "id": "lua/nonfinite-payload",
+    "module": "Rendering and UI"
+  },
+  {
+    "id": "map/arc-210-header-regression",
+    "module": "Rendering and UI"
+  },
+  {
+    "id": "map/manual-runway-overrides-fms",
+    "module": "Rendering and UI"
+  },
+  {
+    "id": "native/cache/osm",
+    "module": "Native integration"
+  },
+  {
+    "id": "native/cache/reextract",
+    "module": "Native integration"
+  },
+  {
+    "id": "native/cache/reuse",
+    "module": "Native integration"
+  },
+  {
+    "id": "native/cold-start-position-confirmation",
+    "module": "Native integration"
+  },
+  {
+    "id": "native/direct-init/1",
+    "module": "Native integration"
+  },
+  {
+    "id": "native/direct-init/2",
+    "module": "Native integration"
+  },
+  {
+    "id": "native/lr-backend-replacement",
+    "module": "Native integration"
+  },
+  {
+    "id": "native/mcdu-capture-restoration-no-writes",
+    "module": "Native integration"
+  },
+  {
+    "id": "native/unsupported-disable-stop-cleanup",
+    "module": "Native integration"
+  },
+  {
+    "id": "native/zibo-deferred-direct-source",
+    "module": "Native integration"
+  },
+  {
+    "id": "plan/crew-consultation-lifecycle",
+    "module": "Airport and route"
+  },
+  {
+    "id": "plan/distance/300",
+    "module": "Airport and route"
+  },
+  {
+    "id": "plan/distance/350",
+    "module": "Airport and route"
+  },
+  {
+    "id": "plan/distance/50",
+    "module": "Airport and route"
+  },
+  {
+    "id": "plan/distance/above-50",
+    "module": "Airport and route"
+  },
+  {
+    "id": "profile/ambiguous-batch",
+    "module": "Aircraft profiles"
+  },
+  {
+    "id": "profile/id-precedence-fails-closed",
+    "module": "Aircraft profiles"
+  },
+  {
+    "id": "profile/incomplete-modern",
+    "module": "Aircraft profiles"
+  },
+  {
+    "id": "profile/invalid-indices",
+    "module": "Aircraft profiles"
+  },
+  {
+    "id": "profile/invalid-uv-range",
+    "module": "Aircraft profiles"
+  },
+  {
+    "id": "profile/malformed-json-stale-reset",
+    "module": "Aircraft profiles"
+  },
+  {
+    "id": "profile/missing-brightness",
+    "module": "Aircraft profiles"
+  },
+  {
+    "id": "profile/modern",
+    "module": "Aircraft profiles"
+  },
+  {
+    "id": "profile/path-traversal",
+    "module": "Aircraft profiles"
+  },
+  {
+    "id": "profile/static-batch",
+    "module": "Aircraft profiles"
+  },
+  {
+    "id": "route/airport-isolation",
+    "module": "Airport and route"
+  },
+  {
+    "id": "route/connected-departure-and-ribbon",
+    "module": "Airport and route"
+  },
+  {
+    "id": "route/disconnected-input",
+    "module": "Airport and route"
+  },
+  {
+    "id": "route/projected-stand-oneway",
+    "module": "Airport and route"
+  },
+  {
+    "id": "runway/airport-change",
+    "module": "Runway advisory"
+  },
+  {
+    "id": "runway/already-on-runway",
+    "module": "Runway advisory"
+  },
+  {
+    "id": "runway/envelope/A321",
+    "module": "Runway advisory"
+  },
+  {
+    "id": "runway/envelope/A333",
+    "module": "Runway advisory"
+  },
+  {
+    "id": "runway/envelope/A339",
+    "module": "Runway advisory"
+  },
+  {
+    "id": "runway/envelope/A346",
+    "module": "Runway advisory"
+  },
+  {
+    "id": "runway/envelope/B738",
+    "module": "Runway advisory"
+  },
+  {
+    "id": "runway/inside-suppression",
+    "module": "Runway advisory"
+  },
+  {
+    "id": "runway/invalid-geometry",
+    "module": "Runway advisory"
+  },
+  {
+    "id": "runway/invalid-provider",
+    "module": "Runway advisory"
+  },
+  {
+    "id": "runway/nearest-two-threats",
+    "module": "Runway advisory"
+  },
+  {
+    "id": "runway/paused-airport-change",
+    "module": "Runway advisory"
+  },
+  {
+    "id": "runway/qualification-rearm-pause-stop",
+    "module": "Runway advisory"
+  },
+  {
+    "id": "runway/stopway-protection",
+    "module": "Runway advisory"
+  },
+  {
+    "id": "runway/timeout-suppression",
+    "module": "Runway advisory"
+  },
+  {
+    "id": "toliss/fms/automatic-phase-gate-and-latch",
+    "module": "FMS"
+  },
+  {
+    "id": "toliss/fms/crew-interruption",
+    "module": "FMS"
+  },
+  {
+    "id": "toliss/fms/cross-page-route-change",
+    "module": "FMS"
+  },
+  {
+    "id": "toliss/fms/direct-init-independent-of-automation",
+    "module": "FMS"
+  },
+  {
+    "id": "toliss/fms/empty-plan-clears-stale-data",
+    "module": "FMS"
+  },
+  {
+    "id": "toliss/fms/partial-pair-and-flight-phase",
+    "module": "FMS"
+  },
+  {
+    "id": "toliss/fms/scratchpad-retry-budget",
+    "module": "FMS"
+  },
+  {
+    "id": "toliss/fms/temporary-fpln-rejected",
+    "module": "FMS"
+  },
+  {
+    "id": "toliss/fms/temporary-init-rejected",
+    "module": "FMS"
+  },
+  {
+    "id": "toliss/fms/unverified-lsk-restore",
+    "module": "FMS"
+  },
+  {
+    "id": "toliss/fms/verified-ident-transaction",
+    "module": "FMS"
+  },
+  {
+    "id": "tools/menu-save-conflict",
+    "module": "Menu tools"
+  },
+  {
+    "id": "ui/draft-confirmation-isolation",
+    "module": "Rendering and UI"
+  },
+  {
+    "id": "ui/stale-feature-actions",
+    "module": "Rendering and UI"
+  }
+]

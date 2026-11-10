@@ -11,9 +11,11 @@ public:
     void (*log_event)(const std::string&)=nullptr;
     // CDU automation follows the user's sampling switch; direct sources may opt out.
     virtual bool uses_mcdu_sampling_setting() const {return true;}
+    virtual void set_light_mode(bool) {}
     virtual bool bind()=0;
     virtual void bind_activity()=0;
-    // Crew-triggered reads of the visible page do not use the automation switch.
+    // 不会主动操作 MCDU2、翻页并产生响声的只读检测，在所有挡位都有。
+    // Visible INIT FROM/TO and ALTN reads remain available in [0], [1] and [2].
     virtual void tick_direct(double,bool) {}
     virtual void tick(double now,bool usable)=0;
     virtual void clear(bool restore)=0;
@@ -36,6 +38,7 @@ public:
         if(source_)source_->log_event=log_event;
     }
     bool bind() {return source_&&source_->bind();}
+    void set_light_mode(bool enabled) {if(source_)source_->set_light_mode(enabled);}
     void bind_activity() {if(source_)source_->bind_activity();}
     void tick_direct(double now,bool usable) {if(source_)source_->tick_direct(now,usable);}
     void tick(double now,bool usable) {if(source_)source_->tick(now,usable);}

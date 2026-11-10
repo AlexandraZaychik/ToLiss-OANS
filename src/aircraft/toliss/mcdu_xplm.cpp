@@ -1,5 +1,6 @@
 #include "mcdu_xplm.hpp"
 #include "detail_log.hpp"
+#include "fms_light_xplm.hpp"
 #include <XPLMProcessing.h>
 #include <algorithm>
 #include <cstring>
@@ -28,7 +29,7 @@ McduScreen McduFmsPort::read_init(int unit) const {
     return s;
 }
 void McduFmsPort::tick_direct(double now,bool usable) {
-    // Run after the aircraft handles the key, independently of MCDU2 automation.
+    // Visible INIT reads remain available in all sampling modes.
     for(int unit:{1,2}) {
         auto& request=init_reads_[unit-1];
         if(!request.fields)continue;
@@ -37,11 +38,11 @@ void McduFmsPort::tick_direct(double now,bool usable) {
         refresh_phase(now);
         const auto screen=read_init(unit);
         const bool blocked=screen.contains("TMPY")||screen.contains("TEMPY");
+        const bool success=sampler.capture_init(now,screen);
+        if(success)automatic.observe(sampler.complete_pair()?sampler.sampled_plan():FmsPlan{});
         for(unsigned field:{1u,2u})if(request.fields&field) {
             const std::string source="direct detect MCDU"+std::to_string(unit)+" INIT "+
                 (field==1?"LSK1R":"LSK2L")+(request.retry?" retry 1":"");
-            const bool success=sampler.capture_init(now,screen,field==2);
-            if(field==1&&success)automatic.observe(sampler.complete_pair()?sampler.sampled_plan():FmsPlan{});
             if(log_event)log_event(source+(success?" success":" fail ("+sampler.status()+")"));
         }
         if(blocked&&!request.retry) {request.retry=1;request.due=now+5;}
@@ -55,6 +56,7 @@ void McduFmsPort::send(const std::string& suffix) {
     issuing_=true;XPLMCommandOnce(it->second);issuing_=false;
 }
 void McduFmsPort::finish_detection(const std::string& result) {
+    if(light_attempt_) {lights_.finish(XPLMGetElapsedTime(),result=="success");light_attempt_=false;}
     if(!detection_source_.empty()&&log_event)log_event(detection_source_+" "+result);
     detection_source_.clear();
 }
@@ -70,8 +72,8 @@ int McduFmsPort::activity(XPLMCommandRef command,XPLMCommandPhase phase,void* pt
             const auto& key=it->second;
             const auto& parent=p.major_pages_[key.unit-1];
             if(parent=="INIT")init_field=key.key=="LSK1R"?1:key.key=="LSK2L"?2:0;
-            request_sample=(parent=="F-PLN"&&key.key=="LSK6R")||
-                           (parent=="SEC F-PLN"&&key.key=="LSK4L");
+            request_sample=!p.light_mode_&&((parent=="F-PLN"&&key.key=="LSK6R")||
+                           (parent=="SEC F-PLN"&&key.key=="LSK4L"));
             if(request_sample)p.trigger_source_="trigger detect "+parent+" "+key.key;
             if(init_field) {
                 auto& request=p.init_reads_[key.unit-1];
@@ -82,6 +84,10 @@ int McduFmsPort::activity(XPLMCommandRef command,XPLMCommandPhase phase,void* pt
         if(p.sampler.busy()) {
             p.refresh_phase(XPLMGetElapsedTime());
             p.finish_detection("fail (crew interrupted)");
+        }
+        if(p.light_request_) {
+            p.lights_.finish(XPLMGetElapsedTime(),false);p.light_request_=false;
+            p.sampler.discard_request();
         }
         p.sampler.activity(XPLMGetElapsedTime(),request_sample);
         if(init_field)p.sampler.discard_request();
@@ -149,8 +155,17 @@ void McduFmsPort::tick(double now,bool usable) {
     OANS_TRACE_SCOPE();
     if(!ready())return;
     if(automatic.phase_due(now)||sampler.wants_screen(now))refresh_phase(now);
-    if(!automatic.capture_allowed())sampler.stop_automatic_capture();
-    if(automatic.request_due(now,usable,sampler.busy()))sampler.request();
+    if(light_mode_) {
+        if(lights_.poll_due(now))lights_.poll(now,fms_light_switches());
+        const int light=lights_.request(now,usable&&!sampler.busy()&&!sampler.has_request());
+        if(light>=0) {
+            light_source_=std::string("light detect ")+(light==0?"beacon":"landing")+" try "+std::to_string(lights_.attempt());
+            light_request_=true;sampler.request();
+        }
+    } else {
+        if(!automatic.capture_allowed())sampler.stop_automatic_capture();
+        if(automatic.request_due(now,usable,sampler.busy()))sampler.request();
+    }
     McduScreen screen;
     if(usable&&sampler.wants_screen(now)) {
         if(now<next_read_)return;
@@ -172,8 +187,11 @@ void McduFmsPort::tick(double now,bool usable) {
     const auto command=sampler.tick(now,screen,usable,restore_page);
     if(starting) {
         if(sampler.crew_triggered()) {
+            if(light_request_) {lights_.finish(now,false);light_request_=false;}
             detection_source_=trigger_source_;
             if(sampler.crew_retry())detection_source_+=" retry "+std::to_string(sampler.crew_retry());
+        } else if(light_request_) {
+            light_request_=false;light_attempt_=true;detection_source_=light_source_;
         } else detection_source_="auto detect try "+std::to_string(++auto_attempts_);
         if(log_event)log_event(detection_source_);
         if(!sampler.busy()) {
@@ -209,7 +227,7 @@ void McduFmsPort::clear(bool restore) {
     for(const auto& c:observed_)XPLMUnregisterCommandHandler(c.first,activity,1,this);
     observed_.clear();pages_.clear();text_.clear();next_read_=0;sampler.reset(false);
     automatic=FmsAutoCapture{};generation_seen_=0;auto_attempts_=0;trigger_source_.clear();
-    init_reads_={};
+    init_reads_={};lights_={};light_request_=light_attempt_=false;light_source_.clear();
 }
 void McduFmsPort::diagnostics(std::ostream& f,double now,bool enabled) const {
     const auto& plan=sampler.plan();
@@ -218,6 +236,7 @@ void McduFmsPort::diagnostics(std::ostream& f,double now,bool enabled) const {
      <<" plan_status="<<plan.reason<<" origin="<<plan.origin.airport<<" departure_runway="<<plan.origin.runway
      <<" destination="<<plan.destination.airport<<" arrival_runway="<<plan.destination.runway<<" alternate="<<plan.alternate
      <<" saved_page="<<mcdu_page_name(sampler.saved_page())<<'\n';
+    f<<"FMS_LIGHT mode="<<light_mode_<<" pending="<<light_request_<<" active="<<light_attempt_<<'\n';
     f<<"FMS_AUTO ecam_phase="<<automatic.phase()<<" confirmations="<<automatic.confirmations()
      <<" complete="<<automatic.complete()<<'\n';
     f<<"MCDU_MAJOR mcdu1="<<major_page(1)<<" mcdu2="<<major_page(2)<<'\n';

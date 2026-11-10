@@ -299,8 +299,8 @@ local function traffic_label(C, target, x, y)
     end
 end
 
-function a350_render(cx, cy, scale, angle, ax, ay, lat, lon, psi, mag, mode, rng, crosses, flags, radius, bottom, fms_airport, fms_runway, alerts, blink, outside_plan, map_runway, traffic, position_valid, simple_stand_names, layer)
-    GLB.n, GLB.cap = 0, 180000
+function a350_render(cx, cy, scale, angle, ax, ay, lat, lon, psi, mag, mode, rng, crosses, flags, radius, bottom, fms_airport, fms_runway, alerts, blink, outside_plan, map_runway, traffic, position_valid, simple_stand_names, layer, detail_quality)
+    GLB.n, GLB.cap = 0, detail_quality == 0 and math.huge or (detail_quality == 1 and 270000 or 180000)
     native_draw_reset()
     GLB.wu, GLB.wv = TF.wu, TF.wv
     GLB.px, GLB.ts = 1, 2
@@ -316,7 +316,8 @@ function a350_render(cx, cy, scale, angle, ax, ay, lat, lon, psi, mag, mode, rng
     local C = {G=G, x0=0, y0=0, cw=300, ch=300, nd={side=0}, placed={}, hit={},
                wcx=cx, wcy=cy, sc=scale/2, hv=angle/D2R, hc=math.cos(angle), hs=math.sin(angle),
                ax=ax/2, ay=(600-ay)/2, mode=mode, rng=rng, Rr=radius/2,
-               map_bottom=(600-bottom)/2,pair_segments={},label_info={}}
+               map_bottom=(600-bottom)/2,pair_segments={},label_info={},
+               detail_quality=detail_quality}
     MAPX.setup(C)
     if layer == 1 then
         -- Match map_texture_margin=64 host pixels. Keep label placement in the
@@ -325,8 +326,10 @@ function a350_render(cx, cy, scale, angle, ax, ay, lat, lon, psi, mag, mode, rng
         DL.clip = {-64,664,-64,664}
         DL.pad = 32 -- local units; geometry clips separately from atlas text.
     end
-    if layer == 0 or layer == 1 then
-    MAPX.surfaces(C)
+    local surface_vertices = 0
+    if layer == 0 or layer == 1 then MAPX.surfaces(C) end
+    if layer == 1 then surface_vertices = GLB.n end
+    if layer == 0 or layer == 5 then
     -- Keep the original runway geometry, projection, polygon fill and clipping.
     -- The host supplies the ANF threats instead of the upstream first-hit RWYA.
     if blink then
@@ -344,6 +347,8 @@ function a350_render(cx, cy, scale, angle, ax, ay, lat, lon, psi, mag, mode, rng
             end
         end
     end
+    end -- runway alert overlay
+    if layer == 0 or layer == 1 then
     -- Reserve the host header and lower controls before original label placement.
     C.placed = {{0,0,300,25}, {0,(600-bottom)/2,300,300},
                 {OANS_R[1]-2,OANS_R[2]-2,300,OANS_R[4]+2}}
@@ -355,7 +360,7 @@ function a350_render(cx, cy, scale, angle, ax, ay, lat, lon, psi, mag, mode, rng
     MAPX.draw_tower(C)
     select_stand_names(G, simple_stand_names)
     MAPX.labels(C)
-    end -- base layer: surfaces, runway fill, tower and labels
+    end -- static labels and tower (separated from surfaces by the host)
     if layer == 0 or layer == 2 or layer == 3 then
     NDUI.compass(C)
     end
@@ -392,7 +397,7 @@ function a350_render(cx, cy, scale, angle, ax, ay, lat, lon, psi, mag, mode, rng
         end
     end
     end -- dynamic layer: compass, ownship and traffic
-    return GLB.n, C.label_info
+    return GLB.n, C.label_info, surface_vertices
 end
 
 -- Use A350's original B612 metrics and Airbus key primitives for annunciation.

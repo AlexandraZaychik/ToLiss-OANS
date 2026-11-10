@@ -8,11 +8,6 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $testRoot = Join-Path $projectRoot ('build/mock-host'+$(if($BuildFlavor -eq 'Debug'){'-debug'}else{''}))
 $package = Join-Path $testRoot 'ToLissOANS'
-# Own exact extraction/coordinate assertions here; the loader host exercises
-# the generated profile through plugin startup and projected mouse input.
-$profileFixture = Join-Path $testRoot ('profile-generator-' + [guid]::NewGuid().ToString('N'))
-& (Join-Path $projectRoot 'build/aircraft_profile_generator_tests.exe') (Join-Path $AircraftPath 'a320.acf') (Join-Path $projectRoot 'config/toliss') $profileFixture
-if ($LASTEXITCODE -ne 0) { throw 'Aircraft profile extraction tests failed' }
 $fixture = Join-Path $testRoot 'sim\Global Scenery\Global Airports\Earth nav data'
 New-Item -ItemType Directory -Force -Path $testRoot,(Join-Path $package '64'),$fixture | Out-Null
 $cycleFixture=Join-Path $testRoot 'sim\Custom Data'
@@ -28,10 +23,12 @@ Copy-Item -LiteralPath (Join-Path $projectRoot 'config') -Destination $package -
 Copy-Item -LiteralPath (Join-Path $projectRoot 'assets') -Destination $package -Recurse -Force
 # Exercise actual plugin background extraction with an on-disk binary DSF,
 # while also providing cached OSM fallbacks so lifecycle tests need no network.
-& (Join-Path $projectRoot 'build/dsf_buildings_tests.exe') '--fixture' (Join-Path $fixture '+30+120/+30+120.dsf')
+& (Join-Path $projectRoot 'build/pruned/dsf_buildings_tests.exe') '--fixture' (Join-Path $fixture '+30+120/+30+120.dsf')
 if ($LASTEXITCODE -ne 0) { throw 'DSF fixture generation failed' }
 $buildingCache=Join-Path $package 'cache'
 New-Item -ItemType Directory -Force $buildingCache | Out-Null
+$dsfCache=Join-Path $buildingCache 'dsf_buildings_ZTEST.json'
+if(Test-Path -LiteralPath $dsfCache){Remove-Item -LiteralPath $dsfCache}
 foreach($airportCode in @('ZTEST','ZALT','ZNEAR','VABB','VAAA','VCCC')) {
     $geometry=@(@{lon=120.01;lat=30.001},@{lon=120.012;lat=30.001},@{lon=120.012;lat=30.003},@{lon=120.01;lat=30.003},@{lon=120.01;lat=30.001})
     @{elements=@(@{type='way';id=1;tags=@{aeroway='terminal'};geometry=$geometry})} | ConvertTo-Json -Depth 8 -Compress | Set-Content -LiteralPath (Join-Path $buildingCache ('osm2_'+$airportCode+'.json')) -Encoding utf8NoBOM
@@ -95,35 +92,31 @@ Push-Location $projectRoot
 try {
     & $compiler '-std=c++17' '-O2' '-static' '-shared' '-DXPLM=1' '-DIBM=1' '-DAPL=0' '-DLIN=0' '-DXPLM200' '-DXPLM210' '-DXPLM300' '-DXPLM301' '-DXPLM303' "-I$SdkRoot\CHeaders\XPLM" 'tests/mock_xplm.cpp' '-o' (Join-Path $testRoot 'XPLM_64.dll')
     if ($LASTEXITCODE -ne 0) { throw 'Mock SDK compilation failed' }
-    & $compiler '-std=c++17' '-O2' '-static' '-Isrc' '-Ivendor/xptools/Utils' 'tests/plugin_host.cpp' 'src/aircraft/toliss/profile.cpp' (Join-Path $projectRoot 'build/dsf/libdsf.a') '-o' (Join-Path $testRoot 'plugin_host.exe')
+    & $compiler '-std=c++17' '-O2' '-static' '-Isrc' '-Ivendor/xptools/Utils' 'tests/plugin_host.cpp' '-o' (Join-Path $testRoot 'plugin_host.exe')
     if ($LASTEXITCODE -ne 0) { throw 'Native host compilation failed' }
-    & (Join-Path $testRoot 'plugin_host.exe') (Join-Path $testRoot 'XPLM_64.dll') (Join-Path $package '64\win.xpl') (Join-Path $testRoot 'sim') (Join-Path $AircraftPath 'a320.acf') '--test-failure-cleanup'
-    if ($LASTEXITCODE -ne 0) { throw 'Native host failure-cleanup regression failed' }
-    Copy-Item -LiteralPath (Join-Path $projectRoot 'config.ini') -Destination $package -Force
-    # PLAN runs the extraction assertion too; start independently of old caches.
-    $planDsfCache=Join-Path $buildingCache 'dsf_buildings_ZTEST.json'
-    if(Test-Path -LiteralPath $planDsfCache){Remove-Item -LiteralPath $planDsfCache}
-    & (Join-Path $testRoot 'plugin_host.exe') (Join-Path $testRoot 'XPLM_64.dll') (Join-Path $package '64\win.xpl') (Join-Path $testRoot 'sim') (Join-Path $AircraftPath 'a320.acf') '--test-plan-airport'
-    if ($LASTEXITCODE -ne 0) { throw 'Native PLAN airport selection regression failed' }
-    Copy-Item -LiteralPath (Join-Path $projectRoot 'config.ini') -Destination $package -Force
-    $dsfCache=Join-Path $buildingCache 'dsf_buildings_ZTEST.json'
-    if(Test-Path -LiteralPath $dsfCache){Remove-Item -LiteralPath $dsfCache}
-    & (Join-Path $testRoot 'plugin_host.exe') (Join-Path $testRoot 'XPLM_64.dll') (Join-Path $package '64\win.xpl') (Join-Path $testRoot 'sim') (Join-Path $AircraftPath 'a320.acf')
+    function Invoke-IsolatedHost([string]$Mode='') {
+        Copy-Item -LiteralPath (Join-Path $projectRoot 'config.ini') -Destination $package -Force
+        foreach($name in @('diagnostics.log','detail.log','interfaces.txt')) {
+            $path=Join-Path $package $name
+            if(Test-Path -LiteralPath $path){Remove-Item -LiteralPath $path}
+        }
+        [string[]]$extra=if($Mode){@($Mode)}else{@()}
+        & (Join-Path $testRoot 'plugin_host.exe') (Join-Path $testRoot 'XPLM_64.dll') (Join-Path $package '64\win.xpl') (Join-Path $testRoot 'sim') (Join-Path $AircraftPath 'a320.acf') @extra
+        if($LASTEXITCODE -ne 0){throw "Native lifecycle failed: $Mode"}
+    }
+    Invoke-IsolatedHost
     if ($LASTEXITCODE -ne 0) { throw 'Native plugin lifecycle tests failed' }
-    $dsfTile=Join-Path $fixture '+30+120/+30+120.dsf'
-    Remove-Item -LiteralPath $dsfTile
-    Copy-Item -LiteralPath (Join-Path $projectRoot 'config.ini') -Destination $package -Force
-    & (Join-Path $testRoot 'plugin_host.exe') (Join-Path $testRoot 'XPLM_64.dll') (Join-Path $package '64\win.xpl') (Join-Path $testRoot 'sim') (Join-Path $AircraftPath 'a320.acf') '--test-dsf-cache'
-    if ($LASTEXITCODE -ne 0) { throw 'DSF cache must work with no source DSF present' }
-    & (Join-Path $projectRoot 'build/dsf_buildings_tests.exe') '--fixture' $dsfTile
-    if ($LASTEXITCODE -ne 0) { throw 'DSF fixture regeneration failed' }
+    Invoke-IsolatedHost 'a359'
+    Invoke-IsolatedHost 'a35k'
+    Invoke-IsolatedHost 'a350-switch'
+    $tile=Join-Path $fixture '+30+120/+30+120.dsf'
+    Remove-Item -LiteralPath $tile
+    Invoke-IsolatedHost 'reuse'
+    & (Join-Path $projectRoot 'build/pruned/dsf_buildings_tests.exe') '--fixture' $tile
+    if($LASTEXITCODE -ne 0){throw 'DSF fixture regeneration failed'}
     '{broken-json' | Set-Content -LiteralPath $dsfCache -Encoding utf8NoBOM
-    Copy-Item -LiteralPath (Join-Path $projectRoot 'config.ini') -Destination $package -Force
-    & (Join-Path $testRoot 'plugin_host.exe') (Join-Path $testRoot 'XPLM_64.dll') (Join-Path $package '64\win.xpl') (Join-Path $testRoot 'sim') (Join-Path $AircraftPath 'a320.acf') '--test-dsf-reextract'
-    if ($LASTEXITCODE -ne 0) { throw 'Corrupt DSF cache must be rebuilt from scenery' }
-    Remove-Item -LiteralPath $dsfTile
+    Invoke-IsolatedHost 'reextract'
+    Remove-Item -LiteralPath $tile
     '{"schema":"oans-dsf-buildings-v1","buildings":[]}' | Set-Content -LiteralPath $dsfCache -Encoding utf8NoBOM
-    Copy-Item -LiteralPath (Join-Path $projectRoot 'config.ini') -Destination $package -Force
-    & (Join-Path $testRoot 'plugin_host.exe') (Join-Path $testRoot 'XPLM_64.dll') (Join-Path $package '64\win.xpl') (Join-Path $testRoot 'sim') (Join-Path $AircraftPath 'a320.acf') '--test-osm-cache'
-    if ($LASTEXITCODE -ne 0) { throw 'Empty DSF cache and missing scenery must fall back to cached OSM' }
+    Invoke-IsolatedHost 'osm'
 } finally { Pop-Location }

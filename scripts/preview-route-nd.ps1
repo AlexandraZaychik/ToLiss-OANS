@@ -14,7 +14,7 @@ try {
     $flags=@('-std=c++17','-O2','-static','-Isrc','-DOANS_DEBUG=0','-DIBM=1','-DAPL=0','-DLIN=0','-DXPLM200','-DXPLM210','-DXPLM300','-DXPLM301','-DXPLM303','-DNOMINMAX','-DLIL=1',"-I$SdkRoot/CHeaders/XPLM",'-Ivendor/lua-5.4.9/src','-Ivendor/xptools/DSF','-Ivendor/xptools/Utils','-Ivendor/xptools/lzma19/C')
     & $compiler @flags '-shared' '-DXPLM=1' '-DOANS_PREVIEW_GL' 'tests/mock_xplm.cpp' '-lopengl32' "-Wl,--out-implib,$previewBuild/libXPLM.a" '-o' "$previewBuild/XPLM_64.dll"
     if($LASTEXITCODE -ne 0){throw 'Preview SDK compilation failed'}
-    $sources=@('src/core.cpp','src/runway_ahead.cpp','src/fms.cpp','src/aircraft/toliss/mcdu.cpp','src/aircraft/backend.cpp','src/aircraft/toliss/backend.cpp','src/aircraft/zibo/backend.cpp','src/aircraft/zibo/fms_xplm.cpp','src/aircraft/lr/backend.cpp','src/aircraft/lr/mcdu.cpp','src/aircraft/lr/mcdu_xplm.cpp','src/aircraft/toliss/mcdu_xplm.cpp','src/nd_ui.cpp','tools/route_nd_preview.cpp','src/aircraft/toliss/profile.cpp','src/a350_map.cpp','src/dsf_buildings.cpp')
+    $sources=@('src/core.cpp','src/runway_ahead.cpp','src/fms.cpp','src/aircraft/toliss/mcdu.cpp','src/aircraft/backend.cpp','src/aircraft/magknight/backend.cpp','src/aircraft/toliss/backend.cpp','src/aircraft/zibo/backend.cpp','src/aircraft/zibo/fms_xplm.cpp','src/aircraft/lr/backend.cpp','src/aircraft/lr/mcdu.cpp','src/aircraft/lr/mcdu_xplm.cpp','src/aircraft/toliss/mcdu_xplm.cpp','src/nd_ui.cpp','tools/route_nd_preview.cpp','src/aircraft/toliss/profile.cpp','src/a350_map.cpp','src/dsf_buildings.cpp')
     $objects=@()
     foreach($source in $sources) {
         $object=Join-Path $previewBuild (($source -replace '[/.]','_')+'.o')

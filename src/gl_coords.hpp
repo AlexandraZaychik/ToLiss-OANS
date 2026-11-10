@@ -9,9 +9,9 @@ struct TextureRect {double l,b,w,h;};
 // regions. ToLiss enlarges that render target while legacy panel bounds can
 // remain 1024. Recover model coordinates from the actual draw transform instead
 // of treating legacy panel units as the texture size or guessing a resolution.
-inline std::optional<TextureRect> texture_rectangle(bool reverse_y=false) {
-    GLdouble model[16],projection[16],px,py,depth;
-    GLint viewport[4];glGetDoublev(GL_MODELVIEW_MATRIX,model);glGetDoublev(GL_PROJECTION_MATRIX,projection);glGetIntegerv(GL_VIEWPORT,viewport);
+inline std::optional<TextureRect> texture_rectangle(const GLdouble* model,const GLdouble* projection,
+                                                  const GLint* viewport,bool reverse_y=false) {
+    GLdouble px,py,depth;
     if(viewport[2]<=0||viewport[3]<=0)return {};
     if(!gluProject(0,0,0,model,projection,viewport,&px,&py,&depth))return {};
     double x[3],y[3],z[3];
@@ -26,5 +26,10 @@ inline std::optional<TextureRect> texture_rectangle(bool reverse_y=false) {
     // cockpit image with its row origin at the other edge. GLU only knows
     // OpenGL's window transform, not X-Plane's framebuffer orientation.
     return reverse_y?TextureRect{x[0],y[2],w,-h}:TextureRect{x[0],y[0],w,h};
+}
+inline std::optional<TextureRect> texture_rectangle(bool reverse_y=false) {
+    GLdouble model[16],projection[16];GLint viewport[4];
+    glGetDoublev(GL_MODELVIEW_MATRIX,model);glGetDoublev(GL_PROJECTION_MATRIX,projection);glGetIntegerv(GL_VIEWPORT,viewport);
+    return texture_rectangle(model,projection,viewport,reverse_y);
 }
 }

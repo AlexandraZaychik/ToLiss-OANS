@@ -1,6 +1,7 @@
 #pragma once
 #include "mcdu.hpp"
 #include "fms_source.hpp"
+#include "fms_light_capture.hpp"
 #include <XPLMDataAccess.h>
 #include <XPLMUtilities.h>
 #include <vector>
@@ -11,6 +12,7 @@ class McduFmsPort final : public FmsSource {
 public:
     FmsSampler sampler{false};
     FmsAutoCapture automatic;
+    void set_light_mode(bool enabled) override {light_mode_=enabled;}
     bool bind() override;
     void bind_activity() override;
     const std::string& major_page(int unit) const {return major_pages_.at(unit-1);}
@@ -24,6 +26,9 @@ public:
     unsigned generation() const override {return sampler.generation();}
     void diagnostics(std::ostream&,double now,bool enabled) const override;
 private:
+    bool light_mode_=false,light_request_=false,light_attempt_=false;
+    FmsLightCapture lights_;
+    std::string light_source_;
     bool repeat_fpln_=false;
     double repeat_at_=0;
     std::string command_name(int unit,const std::string& key) const;
