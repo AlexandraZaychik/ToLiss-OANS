@@ -32,11 +32,11 @@
         },
         {
           "before": "local LINE_CLASS = { [1] = \"cl\", [7] = \"cl\", [51] = \"cl\", [57] = \"cl\", [60] = \"cl\",\n                     [2] = \"dy\", [8] = \"dy\", [9] = \"dy\", [52] = \"dy\", [58] = \"dy\", [59] = \"dy\",\n                     [20] = \"ws\", [21] = \"ws\", [22] = \"wd\",\n                     [4] = \"hold\", [5] = \"hold\", [6] = \"hold\", [54] = \"hold\", [55] = \"hold\", [56] = \"hold\" }",
-          "after": "-- Wide/black-bordered ILS types intentionally render as their basic yellow path.\nlocal LINE_CLASS = { [1] = \"cl\", [10] = \"cl\", [51] = \"cl\", [60] = \"cl\",\n                     [7] = \"cl\", [11] = \"cl\", [57] = \"cl\", [61] = \"cl\",\n                     [2] = \"dy\", [8] = \"dy\", [9] = \"dy\", [52] = \"dy\", [58] = \"dy\", [59] = \"dy\",\n                     [20] = \"ws\", [21] = \"ws\", [22] = \"wd\",\n                     [4] = \"hold\", [5] = \"hold\", [12] = \"hold\", [13] = \"hold\",\n                     [54] = \"hold\", [55] = \"hold\", [62] = \"hold\", [63] = \"hold\",\n                     [6] = \"ils_hold\", [14] = \"ils_hold\", [56] = \"ils_hold\", [64] = \"ils_hold\" }"
+          "after": "-- Wide/black-bordered ILS types intentionally render as their basic yellow path.\nlocal LINE_CLASS = { [1] = \"cl\", [10] = \"cl\", [51] = \"cl\", [60] = \"cl\",\n                     [7] = \"cl\", [11] = \"cl\", [57] = \"cl\", [61] = \"cl\",\n                     [2] = \"dy\", [8] = \"dy\", [9] = \"dy\", [52] = \"dy\", [58] = \"dy\", [59] = \"dy\",\n                     [20] = \"ws\", [21] = \"ws\", [22] = \"wd\",\n                     [4] = \"hold\", [5] = \"taxi_hold\", [12] = \"hold\", [13] = \"taxi_hold\",\n                     [54] = \"hold\", [55] = \"taxi_hold\", [62] = \"hold\", [63] = \"taxi_hold\",\n                     [6] = \"ils_hold\", [14] = \"ils_hold\", [56] = \"ils_hold\", [64] = \"ils_hold\" }"
         },
         {
           "before": "local G = { pave = {}, pave_m = {}, pave_c = {}, polys = {}, tl = {}, tl_m = {}, tl_c = {}, hold = {}, stands = {}, terms = {},",
-          "after": "local G = { pave = {}, pave_m = {}, pave_c = {}, polys = {}, tl = {}, tl_m = {}, tl_c = {}, hold = {},\n                ils_hold = {}, stands = {}, terms = {},"
+          "after": "local G = { pave = {}, pave_m = {}, pave_c = {}, polys = {}, tl = {}, tl_m = {}, tl_c = {}, hold = {},\n                ils_hold = {}, taxi_hold = {}, stands = {}, terms = {},"
         },
         {
           "before": "if nd.lt and LINE_CLASS[nd.lt] == \"cl\" then has_paint = true; break end",
@@ -44,7 +44,7 @@
         },
         {
           "before": "                else\n                    add_chunks(G.hold, rx, ry)\n                end",
-          "after": "                elseif cur == \"ils_hold\" then\n                    add_chunks(G.ils_hold, rx, ry)\n                else\n                    add_chunks(G.hold, rx, ry)\n                end"
+          "after": "                elseif cur == \"ils_hold\" then\n                    add_chunks(G.ils_hold, rx, ry)\n                elseif cur == \"taxi_hold\" then\n                    add_chunks(G.taxi_hold, rx, ry)\n                else\n                    add_chunks(G.hold, rx, ry)\n                end"
         },
         {
           "before": "-- Gebaeude aus OpenStreetMap (Terminals cyan, andere Gebaeude blau)",
@@ -78,6 +78,10 @@
       "first": 4242,
       "last": 4704,
       "host_edits": [
+        {
+          "before": "if mnx >= 0 and mxx <= W and mny >= 0 and mxy <= Hh then",
+          "after": "if mxx > 0 and mnx < W and mxy > 0 and mny < Hh then"
+        },
         {
           "before": "runway = 0xFF5E5E5E",
           "after": "runway = 0xFFC8C8C8"
@@ -220,8 +224,12 @@
           "after": "if not draw_building(b, MC.building, lim) then break end"
         },
         {
+          "before": "if sc >= 0.12 then",
+          "after": "if sc >= 0.12 or C.boeing then"
+        },
+        {
           "before": "            if sc >= 0.25 then stroke({ G.hold }, MC.hold, (sc >= 0.9) and 3 or 2, 1, math.max(0, BULK - DL.n)) end",
-          "after": "            if sc >= 0.18 then stroke({ G.ils_hold }, MC.taxiline, th, md2, math.max(0, BULK - DL.n) * 0.18) end\n            if sc >= 0.25 then stroke({ G.hold }, MC.hold, (sc >= 0.9) and 3 or 2, 1, math.max(0, BULK - DL.n)) end"
+          "after": "            if C.boeing then\n                if C.rng <= 2 then stroke({ G.hold, G.ils_hold }, 0xFF00A5FF, 0.6, 1, math.max(0, BULK - DL.n)) end\n                if C.rng <= 1 then stroke({ G.taxi_hold }, 0xFF00A5FF, 0.6, 1, math.max(0, BULK - DL.n)) end\n            else\n                if sc >= 0.18 then stroke({ G.ils_hold }, MC.taxiline, th, md2, math.max(0, BULK - DL.n) * 0.18) end\n                if sc >= 0.25 then stroke({ G.hold, G.taxi_hold }, MC.hold, (sc >= 0.9) and 3 or 2, 1, math.max(0, BULK - DL.n)) end\n            end"
         }
       ]
     },
@@ -290,7 +298,53 @@
     {
       "label": "ND compass",
       "first": 6301,
-      "last": 6397
+      "last": 6397,
+      "host_edits": [
+        {
+          "before": "local rs = (C.rng >= 1 and C.rng == math.floor(C.rng)) and string.format(\"%d\", C.rng) or string.format(\"%.1f\", C.rng)",
+          "after": "local rs = string.format(\"%.2f\", C.rng):gsub(\"0+$\", \"\"):gsub(\"%.$\", \"\")"
+        },
+        {
+          "before": "    local cap = TXT.cap\n",
+          "after": "    local cap = TXT.cap\n    local function range_label(cx, cy, label)\n        local w = text_w(label, cap)\n        local x, y = cx - w / 2, cy - FONT_H / 2\n        -- Opaque black backing keeps the cyan range legible over airport geometry.\n        DL.rectf(x - 1, cy - cap / 2 - 1, x + w + 1, cy + cap / 2 + 1, MC.bg)\n        DL.text(x, y, MC.sel, label, cap)\n    end\n"
+        },
+        {
+          "before": "DL.text(lx - text_w(rs, cap) / 2, ly - FONT_H / 2, MC.sel, rs, cap)",
+          "after": "range_label(lx, ly, rs)"
+        },
+        {
+          "before": "        -- Reichweite links und rechts am halben Ring (wie \"5\" / \"7.5\" im FF-ND)\n        for _, a in ipairs({ -52, 52 }) do\n            local t = a * D2R\n            local lx, ly = ax + (R / 2 + 9) * math.sin(t), ay - (R / 2 + 9) * math.cos(t)\n            DL.text(lx - text_w(hs, cap) / 2, ly - FONT_H / 2, MC.sel, hs, cap)\n        end",
+          "after": "        -- ARC shows the full outer-ring distance once, at the left of the arc.\n        local t = -60 * D2R\n        local lx = math.max((C.x0 or 0) + text_w(rs, cap) / 2 + 2, ax + (R - 8) * math.sin(t))\n        local ly = ay - (R - 8) * math.cos(t)\n        range_label(lx, ly, rs)"
+        },
+        {
+          "before": "        local lx, ly = ax + (R / 2 + 9) * math.sin(th), ay - (R / 2 + 9) * math.cos(th)\n        DL.text(lx - text_w(hs, cap) / 2, ly - FONT_H / 2, MC.sel, hs, cap)",
+          "after": "        -- ROSE NAV shows the full outer-ring distance at the lower left.\n        local lx, ly = ax + (R - 16) * math.sin(th), ay - (R - 16) * math.cos(th)\n        range_label(lx, ly, rs)"
+        },
+        {
+          "before": "    local half = C.rng / 2\n    local hs = (half >= 1) and ((math.abs(half * 10 - math.floor(half * 10 + 0.5)) < 1e-6) and string.format(\"%.1f\", half)\n        or string.format(\"%.2f\", half)) or ((half >= 0.1) and string.format(\"%.2f\", half):gsub(\"0$\", \"\") or string.format(\"%.2f\", half))\n",
+          "after": ""
+        },
+        {
+          "before": "DL.line(ax + R * sx, ay + R * sy, ax + (R - l) * sx, ay + (R - l) * sy, MC.ring, 1.0)",
+          "after": "DL.line(ax + R * sx, ay + R * sy, ax + (R + l) * sx, ay + (R + l) * sy, MC.ring, 1.0)"
+        },
+        {
+          "before": "local l = (deg % 10 == 0) and 7 or 4",
+          "after": "local l = (deg % 10 == 0) and 5 or 2.5 -- ToLiss ROSE: 10 / 5 host pixels after the 2x adapter."
+        },
+        {
+          "before": "DL.line(ax + R * sx, ay + R * sy, ax + (R - l) * sx, ay + (R - l) * sy, MC.ring, 0.9)",
+          "after": "DL.line(ax + R * sx, ay + R * sy, ax + (R + l) * sx, ay + (R + l) * sy, MC.ring, 0.9)"
+        },
+        {
+          "before": "local lx, ly = ax + (R - 15) * sx, ay + (R - 15) * sy",
+          "after": "local lx, ly = ax + (R + 15) * sx, ay + (R + 15) * sy"
+        },
+        {
+          "before": "            if deg % 45 == 0 then\n                local px, py = ax + (R + 2) * sx, ay + (R + 2) * sy\n                DL.tri(px, py, px + sx * 6 - sy * 3, py + sy * 6 + sx * 3, px + sx * 6 + sy * 3, py + sy * 6 - sx * 3, MC.ring)\n            end\n        end",
+          "after": "        end\n        -- Fixed relative-bearing markers; the heading scale turns underneath.\n        -- Keep every tick: near alignment exposes its side, as at 88/89 degrees.\n        for deg = 0, 315, 45 do\n            local t = deg * D2R\n            local sx, sy = math.sin(t), -math.cos(t)\n            -- Reference: triangle and long tick have equal radial height.\n            local px, py = ax + R * sx, ay + R * sy\n            NDUI.rose_marker(px, py, px + sx * 5 - sy * 2.9, py + sy * 5 + sx * 2.9,\n                px + sx * 5 + sy * 2.9, py + sy * 5 - sx * 2.9, MC.ring)\n        end"
+        }
+      ]
     },
     {
       "label": "font atlas loader",

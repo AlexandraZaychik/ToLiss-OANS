@@ -27,6 +27,7 @@ struct A350View {
     bool outside_plan=false;
     bool position_valid=true;
     bool simple_stand_names=true;
+    bool boeing_full_compass=false;
     int detail_quality=4; // 0=ultra, 1=max, 2=xhigh, 3=high, 4=medium, 5=low
     bool reusable_with(const A350View& o) const;
     bool same_map_content(const A350View& o) const;

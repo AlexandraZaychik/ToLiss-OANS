@@ -39,17 +39,17 @@ int mode(const DataAccess& d,int) {
     if(m==4)return 4;
     return -1;
 }
-bool powered(const DataAccess& d) {return d.value("mk_brightness",0,0)>0;}
+bool powered(const DataAccess& d) {return d.value("mk_brightness",0,0)>0 || d.value("mk_brightness_fo",0,0)>0;}
 bool position(const DataAccess& d,int side) {
-    return side!=1&&powered(d)&&d.value("mk_irs",0,0)==1;
+    return d.value(side ? "mk_brightness_fo" : "mk_brightness",0,0)>0&&d.value("mk_irs",0,0)==1;
 }
-double brightness(const DataAccess& d,int,bool) {
-    return std::clamp(d.value("mk_brightness",0,0)/10.0,0.0,1.0);
+double brightness(const DataAccess& d,int side,bool) {
+    return std::clamp(d.value(side ? "mk_brightness_fo" : "mk_brightness",0,0)/10.0,0.0,1.0);
 }
 const char* blocked(const DataAccess& d,int side,bool) {
-    if(side!=0)return "MAGKNIGHT 787 FO ND NOT YET ADAPTED";
+    if(side==1&&!d.numeric("mk_brightness_fo",0))return "MAGKNIGHT 787 FO DISPLAY INTERFACE UNAVAILABLE";
     if(!ready(d))return "MAGKNIGHT 787 DISPLAY INTERFACE UNAVAILABLE";
-    if(d.value("mk_nav",0,0)!=1&&d.value("mk_nav",1,0)!=1)return "MAGKNIGHT 787 NAV DISPLAY NOT ACTIVE";
+    if(d.value("mk_nav",side*4,0)!=1&&d.value("mk_nav",side*4+1,0)!=1)return "MAGKNIGHT 787 NAV DISPLAY NOT ACTIVE";
     if(!position(d,side))return "MAGKNIGHT 787 DISPLAY OFF OR IRS UNALIGNED";
     if(mode(d,side)<0)return "SELECT MAP / PLAN";
     const double range=d.value("range0",0,-1);
@@ -61,7 +61,7 @@ const double* uv(const DataAccess&,int side,bool pfd) {
     return pfd ? ::profile::current.pfd_uv[0][side] : ::profile::current.nd_uv[0][side];
 }
 void diagnostics(std::ostream& out,const DataAccess& d) {
-    out<<"MAGKNIGHT_"<<(active_model.empty()?"UNKNOWN":active_model)<<" experimental=1 captain_only=1 fms=unavailable nav="<<d.value("mk_nav",0,-1)
+    out<<"MAGKNIGHT_"<<(active_model.empty()?"UNKNOWN":active_model)<<" experimental=1 captain_only=0 fms=unavailable nav="<<d.value("mk_nav",0,-1)
        <<" irs="<<d.value("mk_irs",0,-1)<<" brightness="<<d.value("mk_brightness",0,-1)
        <<" mode="<<d.value("mode0",0,-1)<<" range="<<d.value("range0",0,-1)<<'\n';
 }
@@ -69,9 +69,9 @@ std::unique_ptr<FmsSource> fms() {return nullptr;}
 }
 const aircraft::Backend& backend() {
     static const aircraft::Backend value{"magknight","Magknight",{
-        {"range0","sim/cockpit2/EFIS/map_range_nm"}, {"mode0","sim/cockpit2/EFIS/map_mode"},
+        {"range0","sim/cockpit2/EFIS/map_range_nm"}, {"mk_range_selector","sim/cockpit/switches/EFIS_map_range_selector"}, {"mode0","sim/cockpit2/EFIS/map_mode"},
         {"mk_nav","aero787/cockpit/mfd/defaultNavDisplays"}, {"mk_irs","aero787/nav/irs/aligned"},
-        {"mk_brightness","aero787/cockpit/lights/inbdDisplayL"}
+        {"mk_brightness","aero787/cockpit/lights/inbdDisplayL"}, {"mk_brightness_fo","aero787/cockpit/lights/inbdDisplayR"}
     },matches,ready,diagnostics,load_profile,fms,mode,position,powered,blocked,advisory,uv,brightness};
     return value;
 }

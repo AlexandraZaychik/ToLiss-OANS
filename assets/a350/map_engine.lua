@@ -619,14 +619,14 @@ local LINE_CLASS = { [1] = "cl", [10] = "cl", [51] = "cl", [60] = "cl",
                      [7] = "cl", [11] = "cl", [57] = "cl", [61] = "cl",
                      [2] = "dy", [8] = "dy", [9] = "dy", [52] = "dy", [58] = "dy", [59] = "dy",
                      [20] = "ws", [21] = "ws", [22] = "wd",
-                     [4] = "hold", [5] = "hold", [12] = "hold", [13] = "hold",
-                     [54] = "hold", [55] = "hold", [62] = "hold", [63] = "hold",
+                     [4] = "hold", [5] = "taxi_hold", [12] = "hold", [13] = "taxi_hold",
+                     [54] = "hold", [55] = "taxi_hold", [62] = "hold", [63] = "taxi_hold",
                      [6] = "ils_hold", [14] = "ils_hold", [56] = "ils_hold", [64] = "ils_hold" }
 local LIGHT_CLASS = { [101] = "cl", [105] = "cl", [107] = "cl", [108] = "cl", [103] = "hold", [104] = "hold" }
 
 function build_geo(apt)
     local G = { pave = {}, pave_m = {}, pave_c = {}, polys = {}, tl = {}, tl_m = {}, tl_c = {}, hold = {},
-                ils_hold = {}, stands = {}, terms = {},
+                ils_hold = {}, taxi_hold = {}, stands = {}, terms = {},
                 dash_y = {}, road = {}, wline = {}, n_white = 0,
                 rwys = {}, edges = {}, lbl = {} }
     local r1 = apt.rwys[1]
@@ -825,6 +825,8 @@ function build_geo(apt)
                     G.n_white = G.n_white + 1
                 elseif cur == "ils_hold" then
                     add_chunks(G.ils_hold, rx, ry)
+                elseif cur == "taxi_hold" then
+                    add_chunks(G.taxi_hold, rx, ry)
                 else
                     add_chunks(G.hold, rx, ry)
                 end
@@ -2418,7 +2420,7 @@ function DL.text_rot(cx, cy, ang, col, s, cap)
             local p4x, p4y = ox + ux * gx0 + vx * gy1, oy + uy * gx0 + vy * gy1
             local mnx, mxx = math.min(p1x, p2x, p3x, p4x), math.max(p1x, p2x, p3x, p4x)
             local mny, mxy = math.min(p1y, p2y, p3y, p4y), math.max(p1y, p2y, p3y, p4y)
-            if mnx >= 0 and mxx <= W and mny >= 0 and mxy <= Hh then
+            if mxx > 0 and mnx < W and mxy > 0 and mny < Hh then
                 local u0 = (sz.x0 + (idx % sz.cols) * sz.cw) / TF.W
                 local v0 = (sz.y0 + math.floor(idx / sz.cols) * sz.ch) / TF.H
                 local a1, b1 = DL.map(p1x, p1y)
@@ -2876,7 +2878,7 @@ function MAPX.surface_steps(C)
     -- 7) Markierungen
     steps[#steps + 1] = function()
         -- Markierungen: gestrichelte Linien (bis 0,5 NM), gelbe Rollweg-Mittellinien, rote Haltelinien
-        if sc >= 0.12 then
+        if sc >= 0.12 or C.boeing then
             local th = (sc >= 0.9) and 2 or ((sc >= 0.35) and 1.5 or 1)
             if sc >= 0.18 then
                 -- Strassen fuer Bodenfahrzeuge weiss gestrichelt, gestrichelte gelbe Markierungen
@@ -2892,8 +2894,13 @@ function MAPX.surface_steps(C)
             else
                 stroke({ (lod == 2) and G.tl_m or G.tl }, MC.taxiline, th, md2, room)
             end
-            if sc >= 0.18 then stroke({ G.ils_hold }, MC.taxiline, th, md2, math.max(0, BULK - DL.n) * 0.18) end
-            if sc >= 0.25 then stroke({ G.hold }, MC.hold, (sc >= 0.9) and 3 or 2, 1, math.max(0, BULK - DL.n)) end
+            if C.boeing then
+                if C.rng <= 2 then stroke({ G.hold, G.ils_hold }, 0xFF00A5FF, 0.6, 1, math.max(0, BULK - DL.n)) end
+                if C.rng <= 1 then stroke({ G.taxi_hold }, 0xFF00A5FF, 0.6, 1, math.max(0, BULK - DL.n)) end
+            else
+                if sc >= 0.18 then stroke({ G.ils_hold }, MC.taxiline, th, md2, math.max(0, BULK - DL.n) * 0.18) end
+                if sc >= 0.25 then stroke({ G.hold, G.taxi_hold }, MC.hold, (sc >= 0.9) and 3 or 2, 1, math.max(0, BULK - DL.n)) end
+            end
         end
         return true
     end
@@ -3363,6 +3370,13 @@ local NDUI = {}
 function NDUI.compass(C)
     local mode, ax, ay, R = C.mode, C.ax, C.ay, C.Rr
     local cap = TXT.cap
+    local function range_label(cx, cy, label)
+        local w = text_w(label, cap)
+        local x, y = cx - w / 2, cy - FONT_H / 2
+        -- Opaque black backing keeps the cyan range legible over airport geometry.
+        DL.rectf(x - 1, cy - cap / 2 - 1, x + w + 1, cy + cap / 2 + 1, MC.bg)
+        DL.text(x, y, MC.sel, label, cap)
+    end
     local function dashed(r)
         local n = (r > 120) and 72 or 48
         for k = 0, n - 1, 2 do
@@ -3370,10 +3384,7 @@ function NDUI.compass(C)
             DL.line(ax + r * math.sin(a1), ay - r * math.cos(a1), ax + r * math.sin(a2), ay - r * math.cos(a2), MC.ring, 0.9)
         end
     end
-    local half = C.rng / 2
-    local hs = (half >= 1) and ((math.abs(half * 10 - math.floor(half * 10 + 0.5)) < 1e-6) and string.format("%.1f", half)
-        or string.format("%.2f", half)) or ((half >= 0.1) and string.format("%.2f", half):gsub("0$", "") or string.format("%.2f", half))
-    local rs = (C.rng >= 1 and C.rng == math.floor(C.rng)) and string.format("%d", C.rng) or string.format("%.1f", C.rng)
+    local rs = string.format("%.2f", C.rng):gsub("0+$", ""):gsub("%.$", "")
     if mode == "plan" then
         -- Kreis mit N / E / S / W (Norden oben; in der BTV-Ansicht mit der Landebahn gedreht),
         -- gestrichelter Halbkreis, Reichweite unten links
@@ -3394,7 +3405,7 @@ function NDUI.compass(C)
         end
         local th = 225 * D2R
         local lx, ly = ax + (R - 16) * math.sin(th), ay - (R - 16) * math.cos(th)
-        DL.text(lx - text_w(rs, cap) / 2, ly - FONT_H / 2, MC.sel, rs, cap)
+        range_label(lx, ly, rs)
         return
     end
     local hdg = DR.mag[0]
@@ -3413,7 +3424,7 @@ function NDUI.compass(C)
             local t = (deg - hdg) * D2R
             local sx, sy = math.sin(t), -math.cos(t)
             local l = (deg % 10 == 0) and 8 or 4.5
-            DL.line(ax + R * sx, ay + R * sy, ax + (R - l) * sx, ay + (R - l) * sy, MC.ring, 1.0)
+            DL.line(ax + R * sx, ay + R * sy, ax + (R + l) * sx, ay + (R + l) * sy, MC.ring, 1.0)
             local dd = deg % 360
             if dd % 10 == 0 then
                 local s = tostring(math.floor(dd / 10))
@@ -3424,34 +3435,40 @@ function NDUI.compass(C)
             end
         end
         dashed(R / 2)
-        -- Reichweite links und rechts am halben Ring (wie "5" / "7.5" im FF-ND)
-        for _, a in ipairs({ -52, 52 }) do
-            local t = a * D2R
-            local lx, ly = ax + (R / 2 + 9) * math.sin(t), ay - (R / 2 + 9) * math.cos(t)
-            DL.text(lx - text_w(hs, cap) / 2, ly - FONT_H / 2, MC.sel, hs, cap)
-        end
+        -- ARC shows the full outer-ring distance once, at the left of the arc.
+        local t = -60 * D2R
+        local lx = math.max((C.x0 or 0) + text_w(rs, cap) / 2 + 2, ax + (R - 8) * math.sin(t))
+        local ly = ay - (R - 8) * math.cos(t)
+        range_label(lx, ly, rs)
     else
         -- Rose: Striche alle 5 Grad, Zahlen alle 30 Grad, Dreiecke alle 45 Grad
         DL.circle(ax, ay, R, MC.ring, 120, 1.0)
         for deg = 0, 355, 5 do
             local t = (deg - hdg) * D2R
             local sx, sy = math.sin(t), -math.cos(t)
-            local l = (deg % 10 == 0) and 7 or 4
-            DL.line(ax + R * sx, ay + R * sy, ax + (R - l) * sx, ay + (R - l) * sy, MC.ring, 0.9)
+            local l = (deg % 10 == 0) and 5 or 2.5 -- ToLiss ROSE: 10 / 5 host pixels after the 2x adapter.
+            DL.line(ax + R * sx, ay + R * sy, ax + (R + l) * sx, ay + (R + l) * sy, MC.ring, 0.9)
             if deg % 30 == 0 then
                 local s = tostring(math.floor(deg / 10))
-                local lx, ly = ax + (R - 15) * sx, ay + (R - 15) * sy
+                local lx, ly = ax + (R + 15) * sx, ay + (R + 15) * sy
                 DL.text_rot(lx, ly, t, MC.white, s, (deg % 90 == 0) and TXT.big or cap)
             end
-            if deg % 45 == 0 then
-                local px, py = ax + (R + 2) * sx, ay + (R + 2) * sy
-                DL.tri(px, py, px + sx * 6 - sy * 3, py + sy * 6 + sx * 3, px + sx * 6 + sy * 3, py + sy * 6 - sx * 3, MC.ring)
-            end
+        end
+        -- Fixed relative-bearing markers; the heading scale turns underneath.
+        -- Keep every tick: near alignment exposes its side, as at 88/89 degrees.
+        for deg = 0, 315, 45 do
+            local t = deg * D2R
+            local sx, sy = math.sin(t), -math.cos(t)
+            -- Reference: triangle and long tick have equal radial height.
+            local px, py = ax + R * sx, ay + R * sy
+            NDUI.rose_marker(px, py, px + sx * 5 - sy * 2.9, py + sy * 5 + sx * 2.9,
+                px + sx * 5 + sy * 2.9, py + sy * 5 - sx * 2.9, MC.ring)
         end
         dashed(R / 2)
         local th = 225 * D2R
-        local lx, ly = ax + (R / 2 + 9) * math.sin(th), ay - (R / 2 + 9) * math.cos(th)
-        DL.text(lx - text_w(hs, cap) / 2, ly - FONT_H / 2, MC.sel, hs, cap)
+        -- ROSE NAV shows the full outer-ring distance at the lower left.
+        local lx, ly = ax + (R - 16) * math.sin(th), ay - (R - 16) * math.cos(th)
+        range_label(lx, ly, rs)
     end
     -- Steuerstrich (gelb) oben
     if mode == "arc" then DL.line(ax, ay - R - 9, ax, ay - R + 9, MC.lubber, 1.6)
@@ -3747,13 +3764,14 @@ end
 -- User video reference: green circled five-point star with an upright TWR label.
 -- Position comes from an unnamed or tower-named apt.dat row 14 viewpoint.
 -- This simulator viewpoint is a fallback, not surveyed physical-tower geometry.
-function MAPX.draw_tower(C)
+function MAPX.draw_tower(C, boeing)
     local tower = S.apt.tower
     if not tower then return end
+    if boeing and C.rng>2 then return end
     local x,y = C.XY(C.G.W(tower.lat,tower.lon))
     local cap = TXT.small
-    local width = text_w('TWR',cap)
-    local bounds = {x-math.max(6,width/2+2), y-7, x+math.max(6,width/2+2), y+8+cap}
+    local width = boeing and 0 or text_w('TWR',cap)
+    local bounds = {x-math.max(6,width/2+2), y-7, x+math.max(6,width/2+2), y+(boeing and 7 or 8+cap)}
     -- Keep the full symbol and label inside the map, clear of host controls.
     if bounds[1] < C.x0 or bounds[3] > C.x0+C.cw or bounds[2] < C.y0+25 or bounds[4] > C.map_bottom then return end
     for _, r in ipairs(C.placed) do
@@ -3761,7 +3779,8 @@ function MAPX.draw_tower(C)
     end
     C.placed[#C.placed+1] = bounds
     DL.circle(x,y,4.8,MC.bg,24,2.8)
-    DL.circle(x,y,4.8,MC.green,24,1.0)
+    local colour=boeing and MC.white or MC.green
+    DL.circle(x,y,4.8,colour,24,1.0)
     local star = {}
     for i = 0,9 do
         local angle = -math.pi/2+i*math.pi/5
@@ -3770,10 +3789,10 @@ function MAPX.draw_tower(C)
     end
     for i,p in ipairs(star) do
         local q = star[i%#star+1]
-        DL.tri(x,y,p[1],p[2],q[1],q[2],MC.green)
+        DL.tri(x,y,p[1],p[2],q[1],q[2],colour)
     end
     local ty = y+7-(FONT_H-cap)/2
-    DL.text(x-width/2,ty,MC.green,'TWR',cap)
+    if not boeing then DL.text(x-width/2,ty,MC.green,'TWR',cap) end
 end
 
 -- Bundled source: ChartNavigation/resources/documents/wtc.json (fast-is-slow).
@@ -3827,7 +3846,122 @@ local function traffic_label(C, target, x, y)
     end
 end
 
-function a350_render(cx, cy, scale, angle, ax, ay, lat, lon, psi, mag, mode, rng, crosses, flags, radius, bottom, fms_airport, fms_runway, alerts, blink, outside_plan, map_runway, traffic, position_valid, simple_stand_names, layer, detail_quality, width)
+-- 787 full-screen MAP compass: ticks and headings lie inside the arc.
+local function boeing_arc_compass(C, mag)
+    local ax,ay,R=C.ax,C.ay,C.Rr
+    -- Full MFD reaches the side edges; the split pane uses a shallow arc.
+    local limit=C.cw>300 and 90 or 62
+    local px,py
+    for a=-limit,limit,2 do
+        local t=a*D2R
+        local x,y=ax+R*math.sin(t),ay-R*math.cos(t)
+        if px then DL.line(px,py,x,y,MC.ring,1.0) end
+        px,py=x,y
+    end
+    for deg=math.ceil((mag-limit)/5)*5,mag+limit,5 do
+        local t=(deg-mag)*D2R
+        local sx,sy=math.sin(t),-math.cos(t)
+        local d=deg%360
+        local major=d%10==0
+        local length=major and 8 or 4
+        DL.line(ax+R*sx,ay+R*sy,ax+(R-length)*sx,ay+(R-length)*sy,MC.ring,1)
+        if d%30==0 then
+            DL.text_rot(ax+(R-18)*sx,ay+(R-18)*sy,t,MC.white,tostring(math.floor(d/10)),8.5)
+        end
+    end
+end
+
+-- The 787 uses individual runway-end identifiers and unboxed cyan taxiway
+-- identifiers. Do not reuse the A350 runway-pair or yellow taxiway labels.
+local function boeing_labels(C)
+    if C.rng>2 then return end
+    local cyan=0xFFFFFF00 -- ABGR
+    local function available(x,y,hw,hh)
+        return x-hw>=C.x0 and x+hw<=C.x0+C.cw and y-hh>=25 and y+hh<=C.map_bottom
+    end
+    for _,r in ipairs(C.vis or {}) do
+        for endi=1,2 do
+            local id=endi==1 and r.id1 or r.id2
+            -- Use the same stopway/blast-pad extent as MAPX.runways, rather
+            -- than placing the placard at the end of the runway pavement.
+            local extension=endi==1 and (r.blast1 or 0) or (r.blast2 or 0)
+            local direction=endi==1 and -1 or 1
+            local wx=(endi==1 and r.x1 or r.x2)+direction*r.ux*extension
+            local wy=(endi==1 and r.y1 or r.y2)+direction*r.uy*extension
+            local x,y=C.XY(wx,wy)
+            -- The placard's long axis is perpendicular to this runway end.
+            local ix,iy=C.XY(endi==1 and r.x2 or r.x1,endi==1 and r.y2 or r.y1)
+            local angle=math.atan2(iy-y,ix-x)+math.pi/2
+            angle=(angle+math.pi/2)%math.pi-math.pi/2 -- keep text readable
+            local ux,uy=math.cos(angle),math.sin(angle)
+            local vx,vy=-uy,ux
+            local cap=6
+            local w=DL.text_rot_w(id,cap)/2+3
+            local h=cap/2+2
+            local hw,hh=math.abs(ux)*w+math.abs(vx)*h,math.abs(uy)*w+math.abs(vy)*h
+            if available(x,y,hw,hh) then
+                local points={}
+                for side=-1,1,2 do
+                    for i=0,8 do
+                        local a=(side==1 and -math.pi/2 or math.pi/2)+i*math.pi/8
+                        local along=side*(w-h)+h*math.cos(a)
+                        local across=h*math.sin(a)
+                        points[#points+1]={x+ux*along+vx*across,y+uy*along+vy*across}
+                    end
+                end
+                MAPX.poly_fill(points,MC.bg)
+                MAPX.poly_line(points,cyan,0.8)
+                DL.text_rot(x,y,angle,MC.white,id,cap)
+                C.placed[#C.placed+1]={x-hw,y-hh,x+hw,y+hh}
+            end
+        end
+    end
+    if C.rng <= 0.5 then
+        for _, l in ipairs(C.G.stand_lbls) do
+            if l.x>C.vminx and l.x<C.vmaxx and l.y>C.vminy and l.y<C.vmaxy then
+                local x,y=C.XY(l.x,l.y)
+                local w=text_w(l.text,5)/2
+                local box={x-w-2,y-5,x+w+2,y+5}
+                if available(x,y,w+2,5) and not overlap(box,C.placed) then
+                    DL.text(x-w,y-FONT_H/2,cyan,l.text,5)
+                    C.placed[#C.placed+1]=box
+                end
+            end
+        end
+    end
+    local per,count={},0
+    for _,e in ipairs(C.G.lbl) do
+        if count>=110 or e.len<18/C.sc then break end
+        local wx,wy=(e.x1+e.x2)/2,(e.y1+e.y2)/2
+        if wx>C.vminx and wx<C.vmaxx and wy>C.vminy and wy<C.vmaxy then
+            local x,y=C.XY(wx,wy)
+            local last=per[e.name]
+            local w=text_w(e.name,5)/2
+            local box={x-w-2,y-5,x+w+2,y+5}
+            if available(x,y,w+2,5) and not overlap(box,C.placed) and
+               (not last or (x-last[1])^2+(y-last[2])^2>85^2) then
+                DL.text(x-w,y-FONT_H/2,cyan,e.name,5)
+                C.placed[#C.placed+1]=box
+                per[e.name]={x,y}
+                count=count+1
+            end
+        end
+    end
+end
+
+-- The 787 ownship is an open white triangle, with its tip along true heading
+-- relative to the map. Traffic keeps its existing separate symbol.
+local function boeing_ownship(x,y,angle)
+    local fx,fy=math.sin(angle),-math.cos(angle)
+    local rx,ry=math.cos(angle),math.sin(angle)
+    local tx,ty=x+fx*12,y+fy*12
+    local lx,ly=x-fx*10-rx*8,y-fy*10-ry*8
+    local qx,qy=x-fx*10+rx*8,y-fy*10+ry*8
+    DL.line(tx,ty,lx,ly,MC.bg,2.5);DL.line(lx,ly,qx,qy,MC.bg,2.5);DL.line(qx,qy,tx,ty,MC.bg,2.5)
+    DL.line(tx,ty,lx,ly,MC.white,0.9);DL.line(lx,ly,qx,qy,MC.white,0.9);DL.line(qx,qy,tx,ty,MC.white,0.9)
+end
+
+function a350_render(cx, cy, scale, angle, ax, ay, lat, lon, psi, mag, mode, rng, crosses, flags, radius, bottom, fms_airport, fms_runway, alerts, blink, outside_plan, map_runway, traffic, position_valid, simple_stand_names, layer, detail_quality, width, boeing_full_compass)
     GLB.n, GLB.cap = 0, detail_quality == 0 and math.huge or (detail_quality == 1 and 270000 or 180000)
     native_draw_reset()
     GLB.wu, GLB.wv = TF.wu, TF.wv
@@ -3840,13 +3974,31 @@ function a350_render(cx, cy, scale, angle, ax, ay, lat, lon, psi, mag, mode, rng
     FMS.airport, FMS.runway = fms_airport, fms_runway
     S.map_runway=map_runway~='' and map_runway or nil
     local G = S.apt.geo
+    -- The palette and temporary layer substitutions are local to this render;
+    -- the shared A350 map must retain its own colours and source geometry.
+    local saved_mc,saved_geo={},{}
+    if boeing_full_compass then
+        local palette={apron=0xFF646464,shoulder=0xFF646464,stand_area=0xFF646464,
+            stand_line=0xFF646464,runway=0xFFC0C0C0,blast=0xFF999999,
+            chevron=rng<=2 and 0xFF555555 or 0xFF999999,terminal=0xFFFFFF00,
+            acft=0xFFFFFFFF}
+        for k,v in pairs(palette) do saved_mc[k]=MC[k];MC[k]=v end
+        for _,key in ipairs({'stand_areas','road','wline','dash_y','tw_net','tl_m','tl'}) do
+            saved_geo[key]=G[key];G[key]={}
+        end
+        saved_geo.buildings=G.buildings
+        if G.buildings then G.buildings={terms=rng<=2 and G.buildings.terms or {},bldg={}} end
+    end
     S.marks[S.apt.icao] = {crosses=crosses, flags=flags}
     local x0, x1 = (600-(width or 600))/4, (600+(width or 600))/4
+    -- The upstream primitives clip to a 300-unit square. A wide 787 MFD
+    -- extends beyond that square on both sides; retain geometry there too.
+    DL.pad = math.max(0,-x0)
     local C = {G=G, x0=x0, y0=0, cw=x1-x0, ch=300, nd={side=0}, placed={}, hit={},
                wcx=cx, wcy=cy, sc=scale/2, hv=angle/D2R, hc=math.cos(angle), hs=math.sin(angle),
                ax=ax/2, ay=(600-ay)/2, mode=mode, rng=rng, Rr=radius/2,
                map_bottom=(600-bottom)/2,pair_segments={},label_info={},
-               detail_quality=detail_quality}
+               detail_quality=detail_quality, boeing=boeing_full_compass}
     MAPX.setup(C)
     DL.clip = {x0*2,x1*2,0,600}
     if layer == 1 then
@@ -3854,7 +4006,7 @@ function a350_render(cx, cy, scale, angle, ax, ay, lat, lon, psi, mag, mode, rng
         -- actual ND viewport, but retain surfaces/text beyond its edges for
         -- per-frame texture reprojection during turns.
         DL.clip = {x0*2-64,x1*2+64,-64,664}
-        DL.pad = 32 -- local units; geometry clips separately from atlas text.
+        DL.pad = math.max(0,-x0)+32 -- local units; retain the texture margin.
     end
     local surface_vertices = 0
     if layer == 0 or layer == 1 then MAPX.surfaces(C) end
@@ -3887,12 +4039,16 @@ function a350_render(cx, cy, scale, angle, ax, ay, lat, lon, psi, mag, mode, rng
         C.placed[#C.placed+1] = mode == 'plan' and {25,136,275,164} or
             (mode == 'arc' and {80,114,220,162} or {80,78,220,126})
     end
-    MAPX.draw_tower(C)
-    select_stand_names(G, simple_stand_names)
-    MAPX.labels(C)
+    if boeing_full_compass then select_stand_names(G, simple_stand_names);MAPX.draw_tower(C,true);boeing_labels(C)
+    else
+        MAPX.draw_tower(C)
+        select_stand_names(G, simple_stand_names)
+        MAPX.labels(C)
+    end
     end -- static labels and tower (separated from surfaces by the host)
     if layer == 0 or layer == 2 or layer == 3 then
-    NDUI.compass(C)
+    if boeing_full_compass and mode == 'arc' then boeing_arc_compass(C,mag)
+    else NDUI.compass(C) end
     end
     if layer == 0 or layer == 2 or layer == 4 then
     local ownship_scale = 0.8
@@ -3902,7 +4058,7 @@ function a350_render(cx, cy, scale, angle, ax, ay, lat, lon, psi, mag, mode, rng
                 draw_plane(tx,ty,(target[3]-C.hv)*D2R,MC.white,ownship_scale*0.8)
             end
     end
-    if traffic_labels_enabled and math.abs(rng-0.2)<0.0001 then
+    if traffic_labels_enabled and math.abs(rng-0.1)<0.0001 then
         -- Dynamic-only rendering starts with an empty placed list. Reserve the
         -- same host controls, all traffic symbols and the valid ownship first.
         C.placed = {{x0,0,x1,25},{x0,C.map_bottom,x1,300},
@@ -3923,10 +4079,16 @@ function a350_render(cx, cy, scale, angle, ax, ay, lat, lon, psi, mag, mode, rng
     if position_valid then
         local px, py = C.XY(G.W(lat,lon))
         if px > x0-20 and px < x1+20 and py > -20 and py < 320 then
-            draw_plane(px,py,(psi-C.hv)*D2R,MC.acft,ownship_scale)
+            if boeing_full_compass then boeing_ownship(px,py,(psi-C.hv)*D2R)
+            else draw_plane(px,py,(psi-C.hv)*D2R,MC.acft,ownship_scale) end
         end
     end
     end -- dynamic layer: compass, ownship and traffic
+    if boeing_full_compass then
+        for k,v in pairs(saved_mc) do MC[k]=v end
+        for _,key in ipairs({'stand_areas','road','wline','dash_y','tw_net','tl_m','tl'}) do G[key]=saved_geo[key] end
+        G.buildings=saved_geo.buildings
+    end
     return GLB.n, C.label_info, surface_vertices
 end
 
@@ -3972,4 +4134,42 @@ function a350_advisory(mode, pfd, hits, fms_runway)
         end
     end
     return GLB.n
+end
+-- ROSE markers need their own coverage fringe: ordinary filled triangles have
+-- hard raster edges. Keep the nominal outline at 50% coverage, with a one-host-
+-- pixel transition shared by the three edges (mitered corners, no overlaps).
+function NDUI.rose_marker(x1,y1,x2,y2,x3,y3,col)
+    if not DL.H then return DL.tri(x1,y1,x2,y2,x3,y3,col) end
+    local points={{DL.map(x1,y1)},{DL.map(x2,y2)},{DL.map(x3,y3)}}
+    local a,b,c=points[1],points[2],points[3]
+    local area=(b[1]-a[1])*(c[2]-a[2])-(b[2]-a[2])*(c[1]-a[1])
+    if math.abs(area)<1e-9 then return end
+    if GLB.n+57>GLB.cap then return end
+    local sign=area>0 and 1 or -1
+    local normals,inner,outer={},{},{}
+    for i,p in ipairs(points) do
+        local q=points[i%3+1]
+        local dx,dy=q[1]-p[1],q[2]-p[2]
+        local len=math.sqrt(dx*dx+dy*dy)
+        normals[i]={sign*dy/len,-sign*dx/len}
+    end
+    for i,p in ipairs(points) do
+        local n,m=normals[(i+1)%3+1],normals[i]
+        local f=GLB.px*0.5/(1+n[1]*m[1]+n[2]*m[2])
+        local dx,dy=(n[1]+m[1])*f,(n[2]+m[2])*f
+        inner[i],outer[i]={p[1]-dx,p[2]-dy},{p[1]+dx,p[2]+dy}
+    end
+    if GLB.fa then col=GLB.fade(col) end
+    local clear=bit.band(col,0x00FFFFFF)
+    native_draw_tri(inner[1][1],inner[1][2],inner[2][1],inner[2][2],
+                    inner[3][1],inner[3][2],col,GLB.wu,GLB.wv)
+    for i,p in ipairs(inner) do
+        local j=i%3+1
+        local q,u,v=inner[j],outer[i],outer[j]
+        -- Reuse the native gradient strip; its core and second side collapse.
+        native_draw_line(p[1],p[2],q[1],q[2],q[1],q[2],p[1],p[2],
+                         u[1],u[2],v[1],v[2],p[1],p[2],q[1],q[2],
+                         col,clear,GLB.wu,GLB.wv)
+    end
+    GLB.n,DL.n=GLB.n+57,DL.n+57
 end

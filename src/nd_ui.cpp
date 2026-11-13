@@ -191,8 +191,8 @@ UiFrame nd_controls(const UiState& s,const UiModel& m) {
         const double size=m.bottom_inset>0?m.bottom_inset-1-stus_bar_safe_bottom:32;
         const double x=m.bottom_inset>0?600-2*size-4:0;
         const double y=m.bottom_inset>0?stus_bar_safe_bottom:114;
-        button({x,y,x+size,y+size},"+",UiAction::zoom_in,0,s.range_nm>.2);
-        button({x+size+4,y,x+2*size+4,y+size},"-",UiAction::zoom_out,0,s.range_nm<5);
+        button({x,y,x+size,y+size},"+",UiAction::zoom_in,0,s.range_nm>(s.magknight_ranges?.5:.1));
+        button({x+size+4,y,x+2*size+4,y+size},"-",UiAction::zoom_out,0,s.range_nm<(s.magknight_ranges?5:2.5));
     }
     if(s.menu) {
         const double x=s.menu_at.x,top=s.menu_at.y;
@@ -211,10 +211,27 @@ void show_context(UiState& s,Vec2 at,Vec2 world) {
     const double lowest_top=(s.panel==Panel::closed?55.0:panel_height(s.panel)+12)+6*32;
     s.menu=true;s.editing=false;s.menu_at={std::clamp(at.x,8.0,382.0),std::clamp(at.y,lowest_top,548.0)};s.context_world=world;
 }
+namespace {
+constexpr double default_ranges[]={2.5,1,.5,.25,.1};
+constexpr double magknight_ranges[]={5,2,1,.5};
+int nearest_range(const double* ranges,int count,double value) {
+    int best=0;
+    if(!std::isfinite(value))return best;
+    for(int i=1;i<count;++i)if(std::abs(value-ranges[i])<std::abs(value-ranges[best]))best=i;
+    return best;
+}
+}
+void set_magknight_ranges(UiState& s,bool enabled) {
+    s.magknight_ranges=enabled;
+    const double* ranges=enabled?magknight_ranges:default_ranges;
+    const int count=enabled?4:5;
+    s.range_nm=ranges[nearest_range(ranges,count,s.range_nm)];
+}
 bool zoom(UiState& s,bool closer) {
-    static constexpr double ranges[]={5,2,1,.5,.2};int i=0;
-    while(i<4&&std::abs(s.range_nm-ranges[i])>.001)++i;
-    int j=std::clamp(i+(closer?1:-1),0,4);s.range_nm=ranges[j];return i!=j;
+    const double* ranges=s.magknight_ranges?magknight_ranges:default_ranges;
+    const int count=s.magknight_ranges?4:5;
+    const int i=nearest_range(ranges,count,s.range_nm);
+    const int j=std::clamp(i+(closer?1:-1),0,count-1);s.range_nm=ranges[j];return i!=j;
 }
 void search_airports(UiState& s,const std::vector<IndexEntry>& index,double,double) {
     const auto previous=s.selection>=0&&s.selection<int(s.results.size())?s.results[s.selection].icao:"";

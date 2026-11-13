@@ -46,7 +46,8 @@ struct UiState {
     Panel last_panel=Panel::map_data;
     bool menu=false,editing=false,follow=true;
     Vec2 menu_at,context_world,center;
-    double range_nm=1;
+    double range_nm=2.5;
+    bool magknight_ranges=false;
     // -1 follows the physical EFIS mode; 0 north up; 1 heading up.
     int orientation=-1;
     std::string query;
@@ -82,6 +83,7 @@ struct UiModel {
 UiFrame nd_controls(const UiState& s,const UiModel& m);
 void show_context(UiState& s,Vec2 at,Vec2 world);
 bool zoom(UiState& s,bool closer);
+void set_magknight_ranges(UiState& s,bool enabled);
 // Reused by ND and diagnostic popup. One search per edit/open, never per draw.
 void search_airports(UiState& s,const std::vector<IndexEntry>& index,double lat,double lon);
 std::string airport_key(const IndexEntry& entry,int mode);

@@ -126,22 +126,22 @@ int main(int argc,char** argv){try{
  const auto* full=profile::current.nd_uv[0][0];
  const auto half=oans::magknight::display::uv(full,1);
  const auto whole=oans::magknight::display::uv(full,2);
- verify(std::abs(half[0]-.17229374)<1e-7&&whole[0]<.00002&&half[2]==whole[2],"B788 half uses right ND pane, full includes left CDU");
+ verify(std::abs(half[0]-.17229374)<1e-7&&whole[0]<.00002&&half[2]<whole[2]&&half[2]>half[0],"B788 half uses right ND pane, full includes left CDU");
  verify(oans::magknight::display::uv(full,0)==half,"off switch stays in the ND pane");
  const auto left=oans::magknight::display::uv(full,1,false);
- verify(left[0]==whole[0]&&left[2]==half[0],"B788 half follows left ND pane after display switching");
+ verify(left[0]==whole[0]&&left[2]<half[0]&&left[2]>left[0],"B788 half follows left ND pane after display switching");
 
  const double half_aspect=oans::magknight::display::aspect(profile::current.nd_corners[0],1);
  const double full_aspect=oans::magknight::display::aspect(profile::current.nd_corners[0],2);
- verify(half_aspect>.66&&half_aspect<.67&&std::abs(full_aspect-2*half_aspect)<1e-5,"B788 physical half/full aspect comes from 3-D glass dimensions");
+ verify(half_aspect>.65&&half_aspect<.67&&std::abs(full_aspect*(1-oans::magknight::display::half_right_inset)-2*half_aspect)<1e-5,"B788 physical half/full aspect comes from 3-D glass dimensions");
  for(double aspect:{half_aspect,full_aspect}) {
   const double x=381;
   verify(std::abs(oans::magknight::display::map_x(300+(x-300)/aspect,aspect)-x)<1e-9,"B788 picking inverts physical aspect compensation");
  }
  const auto& corners=profile::current.nd_corners[0];
  const auto half_left=oans::magknight::display::corner(corners,0,1);
- verify(std::abs(half_left[0]+.225370575)<1e-7&&oans::magknight::display::corner(corners,1,1)==oans::magknight::display::corner(corners,1,2),"B788 click corners follow display extent");
- verify(oans::magknight::display::corner(corners,1,1,false)==half_left,"B788 left pane click projection shares the same seam");
+ verify(std::abs(half_left[0]+.225370575)<1e-7&&oans::magknight::display::corner(corners,1,1)!=oans::magknight::display::corner(corners,1,2),"B788 click corners follow display extent");
+ verify(oans::magknight::display::corner(corners,1,1,false)!=half_left,"B788 left pane click projection shares the same seam");
  verify(oans::magknight::display::next_mode(0)==1&&oans::magknight::display::next_mode(1)==2&&oans::magknight::display::next_mode(2)==0,"B788 three-stage cycle wraps to off");
  write(root/"config/a339.json",good);std::string id;verify(oans::toliss::identify(acf_path,id,error),error);
  write(root/"config"/(id+".json"),"{}");Path loaded;

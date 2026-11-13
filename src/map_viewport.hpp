@@ -11,7 +11,11 @@ inline MapViewport map_viewport(int mode,bool panel,double height=202) {
     // ARC labels sit outside the ring. Reserve 52 pixels below the header
     // (y=552) for the large rotated captions, including their atlas padding.
     const double bottom=panel?height+2:40;
-    return mode==3?MapViewport{{300,160},340,bottom}:MapViewport{{300,285},245,bottom};
+    // Dimensions measured against the ToLiss ND screenshots, normalized to
+    // the 600-pixel display. ARC keeps its outer arc at y=500.
+    if(mode==3)return {{300,100},400,bottom};
+    if(mode==2)return {{300,300},195,bottom};
+    return {{300,298},195,bottom};
 }
 struct MapProjection {
     Vec2 center,anchor{300,285};double scale=1,angle=0,radius=245,bottom=40,width=600;

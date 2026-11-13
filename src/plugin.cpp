@@ -27,6 +27,7 @@
 #include "aircraft_profile.hpp"
 #include "aircraft/backend.hpp"
 #include "aircraft/magknight/display.hpp"
+#include "aircraft/magknight/range_control.hpp"
 #include "gl_state.hpp"
 #include "gl_coords.hpp"
 #include "gl_font.hpp"
@@ -56,7 +57,7 @@
 
 using namespace oans;
 namespace {
-constexpr const char* version="0.4.50";
+constexpr const char* version="0.4.53";
 constexpr float white[3]={1,1,1},cyan[3]={.20f,.90f,1},green[3]={0,1,0},amber[3]={1,.65f,0};
 constexpr float taxi_yellow[3]={.95f,.83f,0},magenta[3]={1,.35f,1};
 AtlasFont map_font;
@@ -142,6 +143,7 @@ double value(const std::string& n,int i=0,double fallback=0) {return dr(n).get(i
 const aircraft::Bindings simulator_names={
     {"lat","sim/flightmodel/position/latitude"},{"lon","sim/flightmodel/position/longitude"},
     {"speed","sim/flightmodel/position/groundspeed"},{"psi","sim/flightmodel/position/psi"},
+    {"track_true","sim/flightmodel/position/hpath"},
     {"tcas_id","sim/cockpit2/tcas/targets/modeS_id"},
     {"tcas_lat","sim/cockpit2/tcas/targets/position/lat"},
     {"tcas_lon","sim/cockpit2/tcas/targets/position/lon"},
@@ -202,15 +204,17 @@ double fms_bind_at=0;
 unsigned fms_generation_seen=0;
 bool enabled=false,profile_ok=false,aircraft_ok=false,manual_airport=false;
 int nd_on[2]={0,0}; // 787: off / ND pane / full display; other aircraft: off / on
+magknight::RangeControl mk_range_control;
+bool mk_was_airborne=false;
 bool three_stage_nd() {return aircraft_backend&&std::strcmp(aircraft_backend->id,"magknight")==0;}
-bool nd_half_right() {return aircraft_data.value("mk_nav",0,0)!=1&&aircraft_data.value("mk_nav",1,0)==1;}
+bool nd_half_right(int side) {const int i=side*4;return aircraft_data.value("mk_nav",i,0)!=1&&aircraft_data.value("mk_nav",i+1,0)==1;}
 double nd_aspect(int id) {
     return id<2&&three_stage_nd()?magknight::display::aspect(profile::current.nd_corners[id],nd_on[id]):1;
 }
 Vec2 map_pointer(int id,Vec2 p) {p.x=magknight::display::map_x(p.x,nd_aspect(id));return p;}
 std::array<double,4> nd_render_uv(int side) {
     const auto uv=aircraft_backend->uv(aircraft_data,side,false);
-    return three_stage_nd()?magknight::display::uv(uv,nd_on[side],nd_half_right()):
+    return three_stage_nd()?magknight::display::uv(uv,nd_on[side],nd_half_right(side)):
         std::array<double,4>{uv[0],uv[1],uv[2],uv[3]};
 }
 bool aircraft_probe_complete=false,aircraft_report_pending=false;
@@ -361,6 +365,11 @@ double oans_aircraft_y_shift(int id) {
     return id<2&&three_stage_nd()?35-magknight::display::standard_y_offset:0;
 }
 Box oans_hit_box(int id) {
+    if(id<2&&three_stage_nd()) {
+        const double width=20/nd_aspect(id),margin=6/nd_aspect(id),bottom=status_bar_height()+6;
+        return nd_half_right(id)?Box{600-margin-width,bottom,600-margin,bottom+20}:
+            Box{margin,bottom,margin+width,bottom+20};
+    }
     auto box=oans_box;box.l=box.r-(box.r-box.l)/nd_aspect(id);
     const double shift=oans_aircraft_y_shift(id);box.b+=shift;box.t+=shift;
     return box;
@@ -442,7 +451,7 @@ std::string form_encode(const std::string& input) {
 #ifdef _WIN32
 std::string post_overpass(const char* host,const std::string& body) {
     const std::wstring wide_host(host,host+std::strlen(host));
-    WinHttpHandle session{WinHttpOpen(L"ToLissOANS/0.4.50 airport-map",WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+    WinHttpHandle session{WinHttpOpen(L"ToLissOANS/0.4.53 airport-map",WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
                                       WINHTTP_NO_PROXY_NAME,WINHTTP_NO_PROXY_BYPASS,0)};
     if(!session.value)throw std::runtime_error(winhttp_error("WinHttpOpen"));
     if(!WinHttpSetTimeouts(session.value,10000,10000,20000,45000))
@@ -752,9 +761,11 @@ void bind_refs(bool aircraft_refs=true) {
     aircraft_probe_complete=true;
     if(selected!=aircraft_backend) {
         nd_on[0]=nd_on[1]=0;
+        mk_range_control.reset();
         if(aircraft_backend)for(const auto& n:aircraft_backend->bindings)refs.erase(n.first);
         fms_port.select(selected?selected->make_fms():nullptr);
         aircraft_backend=selected;profile_ok=aircraft_ok=false;profile::current={};
+        for(int side=0;side<2;++side)set_magknight_ranges(views[side],three_stage_nd());
         fms_bind_at=0;fms_generation_seen=0;model_check_at=0;
     }
     if(aircraft_backend)for(const auto& n:aircraft_backend->bindings)refs[n.first].bind(n.second.c_str());
@@ -837,7 +848,7 @@ void diagnostics() {
     for(int side=0;side<2;++side) {
         const auto box=oans_hit_box(side);
         f<<"ND_state side="<<side<<" enabled="<<nd_on[side]<<" blocked="<<nd_blocked(side)<<'\n';
-        f<<"OANS_switch side="<<side<<" visible="<<(nd_overlay_blocked(side)[0]=='\0')<<" checked="<<bool(nd_on[side])
+        f<<"OANS_switch side="<<side<<" visible="<<(nd_overlay_blocked(side)[0]=='\0'&&(!three_stage_nd()||nd_on[side]))<<" checked="<<(three_stage_nd()?nd_on[side]==2:bool(nd_on[side]))
          <<" display_mode="<<nd_on[side]
          <<" bounds="<<box.l<<','<<box.b<<','<<box.r<<','<<box.t<<" physical_aspect="<<nd_aspect(side)
          <<" vertical_offset_px="<<oans_vertical_offset<<" horizontal_offset_px="<<oans_horizontal_offset<<'\n';
@@ -980,7 +991,14 @@ void confirm_first_oans_position() {
     // An explicit selection in this flight still belongs to the crew.
     if(!manual_airport&&!advisory_test.active&&!advisory_test.pending)nearest_airport();
 }
+bool magknight_can_open() {
+    const bool ground_available=dr("ground").numeric(0)&&dr("ground").numeric(1)&&dr("ground").numeric(2);
+    const bool ground=value("ground",0)>0||value("ground",1)>0||value("ground",2)>0;
+    const double range=dr("range0").numeric()?value("range0",0,-1):-1;
+    return magknight::can_open(ground_available,ground,range);
+}
 void toggle_nd(int side) {
+    if(three_stage_nd()&&!nd_on[side]&&!magknight_can_open())return;
     const bool opening=!nd_on[side]&&!nd_on[1-side];
     nd_on[side]=three_stage_nd()?magknight::display::next_mode(nd_on[side]):!nd_on[side];
     if(!nd_on[side])oans_arc[side]=false;
@@ -997,6 +1015,31 @@ void toggle_nd(int side) {
     }
 }
 int oans_ecam_phase=0;
+void update_magknight_range() {
+    if(!three_stage_nd()||!aircraft_ok) {mk_range_control.reset();return;}
+    const auto& selector=dr("mk_range_selector");
+    const bool valid=dr("ground").numeric(2)&&selector.numeric()&&selector.writable&&(selector.type&xplmType_Int);
+    const double raw=value("mk_range_selector",0,-1);
+    if(!std::isfinite(raw)||raw<0||raw>9||std::floor(raw)!=raw) {
+        mk_range_control.update(false,false,-1,false);return;
+    }
+    const bool ground=value("ground",0)>0||value("ground",1)>0||value("ground",2)>0;
+    const auto change=mk_range_control.update(valid,ground,static_cast<int>(raw),views[0].range_nm>=5);
+    if(change.open) {
+        if(!nd_on[0]&&!magknight_can_open()) {mk_range_control.reset();return;}
+        if(!nd_on[0])toggle_nd(0);
+        if(!nd_on[1])toggle_nd(1);
+        views[0].range_nm=5;views[1].range_nm=5;
+        log("MAGKNIGHT ground OANS auto open at 5 NM");
+    }
+    if(change.close) {
+        nd_on[0]=nd_on[1]=0;oans_arc[0]=oans_arc[1]=false;
+        log("MAGKNIGHT ground OANS auto close");
+    }
+    if(change.zoom_in) {zoom(views[0],true);zoom(views[1],true);}
+    if(change.zoom_out) {zoom(views[0],false);zoom(views[1],false);}
+    if(change.reset_selector)XPLMSetDatai(selector.id,1);
+}
 void update_ecam_oans() {
     const bool toliss=aircraft_backend&&std::strcmp(aircraft_backend->id,"toliss")==0;
     const bool lr=aircraft_backend&&std::strcmp(aircraft_backend->id,"lr")==0;
@@ -1020,8 +1063,8 @@ void update_ecam_oans() {
         log("ECAM 4->5: auto OANS OFF (both sides)");
     }
     if(!landing)return;
-    double landing_range=2;
-    std::string landing_runway="UNKNOWN (fallback 2 NM)";
+    double landing_range=1;
+    std::string landing_runway="UNKNOWN (fallback 1 NM)";
     if(aircraft_position_ready()&&dr("psi").numeric()&&std::isfinite(value("psi"))) {
         // Ownship geometry, never the FMS arrival runway, selected map runway,
         // test advisory or airport's longest runway. The displayed airport is
@@ -1030,7 +1073,7 @@ void update_ecam_oans() {
             const auto position=local(value("lat"),value("lon"),a->lat,a->lon);
             if(const auto* r=runway_at(*a,position,value("psi"))) {
                 const auto size=r->length();
-                landing_range=size<=2500?1:2;
+                landing_range=size<=2500?.5:1;
                 landing_runway=a->icao+" "+r->name+"/"+r->reciprocal+" length_m="+std::to_string(size);
                 break;
             }
@@ -1051,7 +1094,8 @@ void update_ecam_oans() {
         toggle_nd(side);
         oans_arc[side]=true;
         views[side].range_nm=landing_range;views[side].follow=true;views[side].orientation=-1;
-        log("ECAM 7->8: auto OANS side="+std::to_string(side)+" range="+std::to_string(static_cast<int>(landing_range))+" NM mode=ARC");
+        std::ostringstream range_label;range_label<<landing_range;
+        log("ECAM 7->8: auto OANS side="+std::to_string(side)+" range="+range_label.str()+" NM mode=ARC");
     }
     landing_airport_pending=true;
 }
@@ -1067,7 +1111,7 @@ void display_airport(int id) {
 }
 UiModel ui_model() {
     UiModel m;m.index_ready=index_ready;m.profile=profile_ok;m.manual=manual_airport;
-    m.bottom_inset=status_bar_height();m.scale_button=config.scale_button&&!config.test;
+    m.bottom_inset=status_bar_height();m.scale_button=config.scale_button&&!config.test&&!three_stage_nd();
     m.database=airport_database_status;
     m.status=status;
     const auto& plan=fms_port.plan();m.fms_status=fms_port.status();
@@ -1115,8 +1159,8 @@ void ui_action(int id,UiAction action,int arg=0) {
         case UiAction::nearest:nearest_airport();s.panel=Panel::closed;break;
         case UiAction::runway_previous:select_runway(runway_index-1);break;
         case UiAction::runway_next:select_runway(runway_index+1);break;
-        case UiAction::zoom_in:if(config.scale_button)zoom(s,true);break;
-        case UiAction::zoom_out:if(config.scale_button)zoom(s,false);break;
+        case UiAction::zoom_in:if(config.scale_button&&!three_stage_nd())zoom(s,true);break;
+        case UiAction::zoom_out:if(config.scale_button&&!three_stage_nd())zoom(s,false);break;
         case UiAction::center:s.follow=true;break;
         case UiAction::add_cross:if(s.crosses.size()<100)s.crosses.push_back(s.context_world);break;
         case UiAction::add_flag:if(s.flags.size()<100)s.flags.push_back(s.context_world);break;
@@ -1222,18 +1266,32 @@ MapTransform transform(int id) {
     }
     if(!view.follow)m.center=view.center;
     bool heading=view.orientation<0?(mode==2||mode==3):view.orientation==1;
-    const auto viewport=map_viewport(mode,view.panel!=Panel::closed,panel_height(view.panel));
+    auto viewport=map_viewport(mode,view.panel!=Panel::closed,panel_height(view.panel));
+    // The separate map window retains its existing layout; these dimensions
+    // are calibrated against the aircraft's ND, not the desktop window.
+    if(id>=2){viewport.anchor={300,285};viewport.radius=245;}
     m.anchor=viewport.anchor;m.radius=viewport.radius;m.bottom=viewport.bottom;
     const double aspect=nd_aspect(id);m.width=600*aspect;
     m.radius*=std::min(1.0,aspect);
-    if(mode==3)m.anchor.y=500-m.radius;
+    if(id<2&&three_stage_nd()&&nd_on[id]==1&&mode==3) m.radius=420;
+    const bool mk_full_plan=id<2&&three_stage_nd()&&nd_on[id]==2&&mode==4;
+    if(mk_full_plan) {m.anchor.y=300;m.radius=230;}
+    if(mode==3)m.anchor.y=(id<2&&three_stage_nd()&&nd_on[id]==2?520:500)-m.radius;
     m.bottom+=status_bar_height();
-    m.scale=m.radius/(view.range_nm*1852);m.angle=heading?value("psi")*pi/180:0;return m;
+    m.scale=m.radius/(view.range_nm*1852*(mk_full_plan?.5:1));m.angle=heading?value("psi")*pi/180:0;return m;
+}
+void filter_aircraft_controls(int id,UiFrame& frame) {
+    if(id>=2||!three_stage_nd()||!nd_on[id])return;
+    frame.controls.erase(std::remove_if(frame.controls.begin(),frame.controls.end(),[](const UiControl& c) {
+        return c.action==UiAction::panel_toggle ||
+            (c.action==UiAction::center&&c.label=="CENTER ACFT");
+    }),frame.controls.end());
 }
 void draw_controls(int id) {
     OANS_TRACE_SCOPE();
     const float fill[]={.102f,.102f,.102f},edge[]={.55f,.55f,.55f},selected[]={.235f,.235f,.235f},dim[]={.65f,.65f,.68f};
     auto frame=nd_controls(views[id],ui_model());
+    filter_aircraft_controls(id,frame);
     const float status_bg[]={.40f,.40f,.48f},yellow[]={1,1,0},black[]={0,0,0};
     auto selector_text=[&](const UiControl& c,double x,double y,double width,double cap,const float* normal) {
         if(c.enabled&&c.highlight) {
@@ -1430,6 +1488,7 @@ void draw_map(int id,bool nd) {
         input.radius=m.radius;input.bottom=m.bottom;input.width=m.width;
         input.lat=value("lat");input.lon=value("lon");input.psi=value("psi");input.mag=value("magpsi");
         input.simple_stand_names=config.simple_stand_names;
+        input.boeing_full_compass=nd&&three_stage_nd()&&nd_on[id]!=0;
         input.detail_quality=config.detail_quality;
         input.position_valid=aircraft_position_ready(id<2?id:-1);
         if(config.adsb_in)input.traffic=traffic_targets;
@@ -1481,26 +1540,156 @@ void draw_map(int id,bool nd) {
         }
     } else {
         const bool loading=airport_map_loading;
-        const std::string message=loading?"PLEASE WAIT":"ARPT NAV NOT AVAIL";
-        text(300-map_text_width(message,22)*.5,300,message,loading?white:amber,-1,22);
+        const bool mk_loading=nd&&three_stage_nd()&&loading;
+        if(!mk_loading) {
+            const std::string message=loading?"PLEASE WAIT":"ARPT NAV NOT AVAIL";
+            text(300-map_text_width(message,22)*.5,300,message,loading?white:amber,-1,22);
+        }
+    }
+    if(nd&&three_stage_nd()&&nd_on[id]!=0&&mode==3&&view.follow) {
+        // The heading line reaches the compass apex in both 787 layouts.
+        line({300,m.anchor.y+18},{300,m.anchor.y+m.radius},white,1);
+        const double marker=m.anchor.y+m.radius*.5;
+        line({291,marker},{309,marker},white,1);
+        std::ostringstream mid;mid<<view.range_nm*.5;
+        const auto label=mid.str();
+        text(285-map_text_width(label,10),marker-3,label,white,-1,10,false);
     }
     // Flight information and compact airport header follow the A350 hierarchy.
-    rect(0,552,600,600,bg);
+    rect(0,nd&&three_stage_nd()&&nd_on[id]!=0?(nd_on[id]==2&&mode!=4?526:540):552,600,600,bg);
     const std::string airport_label=airport?((airport->icao_explicit?"":"IDENT ")+airport->icao+
         (airport->iata.empty()?"":"  "+airport->iata)):"----";
-    text(8,578,"GS",white,40,16);text(47,576,std::to_string(static_cast<int>(value("speed")/kt+.5)),green,65,22);
-    text(110,578,"TAS",white,60,16);text(165,578,value("tas")/kt>=60?std::to_string(static_cast<int>(value("tas")/kt+.5)):"---",green,70,16);
     const bool heading=view.orientation<0?(mode==2||mode==3):view.orientation==1;
-    std::string title=airport?airport->name:"NO AIRPORT";for(char& c:title)c=static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-    double title_width=std::min(290.0,map_text_width(title,16));text(592-title_width,579,title,white,290,16);
-    text(592-map_text_width(airport_label,18),554,airport_label,white,220,18);
-    text(8,554,heading?"HDG UP":"NORTH UP",white,170,15);
-    std::ostringstream range;range<<view.range_nm;
-    text(8,44+status_bar_height(),range.str()+" NM",cyan,110,16);
+    if(nd&&three_stage_nd()&&nd_on[id]!=0) {
+        const bool half=nd_on[id]==1;
+        const double header_gain=render_gain;
+        if(half)render_gain=std::min(1.0,render_gain*1.6);
+        // 787 display reference: compact flight data on the left, a
+        // centred mode and magnetic heading, and the airport identifier.
+        // The reference's buttons are visual placeholders for now.
+        const float button_edge[]={.65f,.65f,.65f},button_idle[]={.28f,.28f,.28f},button_active[]={0,.32f,0};
+        auto placeholder=[&](double l,double r,const char* label,bool active) {
+            const double bottom=half?568:562,top=half?598:593;
+            rect(l,bottom,r,top,button_edge);rect(l+2,bottom+2,r-2,top-2,active?button_active:button_idle);
+            const double size=half?10:(std::strcmp(label,"MENU")==0?10:14);
+            const double baseline=half?579:(std::strcmp(label,"MENU")==0?577:571);
+            text((l+r-map_text_width(label,size))*.5,baseline,label,white,r-l-6,size);
+        };
+        if(half) {
+            placeholder(4,240,"MAP",mode!=4);placeholder(246,480,"PLAN",mode==4);
+            placeholder(502,594,"MENU",false);
+            // The reference has a small down arrow under MENU.
+            line({541,574},{548,570},white,1);line({548,570},{555,574},white,1);
+            text(8,551,"GS",white,40,10);
+            text(42,551,std::to_string(static_cast<int>(value("speed")/kt+.5)),white,45,12);
+        } else {
+            placeholder(182,298,"MAP",mode!=4);placeholder(303,418,"PLAN",mode==4);
+            placeholder(557,590,"MENU",false);
+            line({570,569},{573.5,565},white,1);line({573.5,565},{577,569},white,1);
+            text(1,544,"GS",white,35,13);
+            text(1,529,std::to_string(static_cast<int>(value("speed")/kt+.5)),white,46,13);
+            text(36,544,"TAS",white,35,13);
+            text(36,529,std::to_string(static_cast<int>(value("tas")/kt+.5)),white,38,13);
+        }
+        auto outline=[&](double l,double b,double r,double t) {
+            rect(l,b,r,b+1,white);rect(l,t-1,r,t,white);rect(l,b,l+1,t,white);rect(r-1,b,r,t,white);
+        };
+        auto centered=[&](double l,double r,double y,const std::string& s,double size) {
+            text((l+r-map_text_width(s,size))*.5,y,s,white,-1,size,false);
+        };
+        std::ostringstream range;range<<view.range_nm;
+        if(half) {
+            // Native split ND reference: the range box sits just below the
+            // aircraft button strip, with two centred, compact text rows.
+            rect(157,524,216,526,white);rect(157,555,216,557,white);
+            rect(157,524,159,557,white);rect(214,524,216,557,white);
+            centered(157,216,545,"RANGE",7.5);
+            centered(157,216,528,range.str(),13.5);
+        } else {
+            rect(74,529,104,557,bg);
+            outline(74,529,104,557);
+            centered(74,104,545,"RANGE",7);
+            centered(74,104,532,range.str(),11);
+        }
+        if(heading) {
+            // Below 3 kt, ground track is unstable or undefined; show heading.
+            // At 3 kt and above, show magnetic ground track when available.
+            const bool has_track=dr("speed").numeric(0)&&std::isfinite(value("speed"))&&value("speed")>=3*kt&&
+                dr("track_true").numeric(0)&&std::isfinite(value("track_true"));
+            const double direction=has_track?value("track_true")+value("magpsi")-value("psi"):value("magpsi");
+            int h=(static_cast<int>(std::lround(direction))%360+360)%360;
+            std::ostringstream hdg;hdg<<std::setw(3)<<std::setfill('0')<<h;
+            if(half) {
+                const double left=300-map_text_width(hdg.str(),15)*.5-4;
+                const double right=300+map_text_width(hdg.str(),15)*.5+4;
+                const std::string source=has_track?"TRK":"HDG";
+                text(left-map_text_width(source,10)-4,518,source,green,-1,10,false);
+                // The native track indication has an open top and a
+                // downward pointer, rather than a closed rectangular box.
+                rect(left,513,right,515,white);
+                rect(left,513,left+2,536,white);rect(right-2,513,right,536,white);
+                line({296,513},{300,505},white,1.5);line({300,505},{304,513},white,1.5);
+                centered(left,right,518,hdg.str(),15);
+                text(right+4,518,"MAG",green,-1,10,false);
+            } else {
+                const std::string source=has_track?"TRK":"HDG";
+                text(278-map_text_width(source,13),538,source,green,-1,13,false);
+                rect(282,531,318,533,white);rect(282,531,284,558,white);rect(316,531,318,558,white);
+                centered(282,318,538,hdg.str(),17);
+                text(320,538,"MAG",green,36,13);
+            }
+        } else if(!half) {
+            text(291,538,"N",green,20,17);
+            line({306,539},{306,553},green,1.5);
+            line({302,549},{306,553},green,1.5);line({306,553},{310,549},green,1.5);
+        }
+        else text(270,547,"NORTH UP",white,100,13);
+        // During loading, show the requested airport rather than the previous
+        // airport which may still be displayed while the new data is prepared.
+        const bool loading=airport_map_loading.load();
+        const std::string ident=loading&&!last_requested.empty()?last_requested:
+            (airport?airport->icao:"----");
+        if(half) {
+            // Mirror the RANGE box about the heading centreline at x=300.
+            rect(384,524,443,526,white);rect(384,555,443,557,white);
+            rect(384,524,386,557,white);rect(441,524,443,557,white);
+            if(loading) {
+                centered(384,443,544,ident,8.5);
+                centered(384,443,529,"LOAD",8.5);
+            } else centered(384,443,544,ident,10);
+        } else {
+            rect(359,527,390,554,bg);
+            outline(359,527,390,554);
+            if(loading) {centered(359,390,542,ident,10);centered(359,390,531,"LOAD",10);}
+            else centered(359,390,542,ident,10);
+        }
+        render_gain=header_gain;
+    } else {
+        text(8,578,"GS",white,40,16);text(47,576,std::to_string(static_cast<int>(value("speed")/kt+.5)),green,65,22);
+        text(110,578,"TAS",white,60,16);text(165,578,value("tas")/kt>=100?std::to_string(static_cast<int>(value("tas")/kt+.5)):"---",green,70,16);
+        std::string title=airport?airport->name:"NO AIRPORT";for(char& c:title)c=static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        double title_width=std::min(290.0,map_text_width(title,16));text(592-title_width,579,title,white,290,16);
+        text(592-map_text_width(airport_label,18),554,airport_label,white,220,18);
+        text(8,554,heading?"HDG UP":"NORTH UP",white,170,15);
+    }
     if(advisory_test.active)text(125,44+status_bar_height(),"TEST",magenta,80,16);
     // Clear the strip before controls so its relocated arrow stays visible.
     if(status_bar_height()>0)rect(0,0,600,status_bar_height(),bg);
     if(!(config.test&&nd))draw_controls(id);
+    if(nd&&three_stage_nd()&&nd_on[id]==2&&mode==4&&view.panel==Panel::closed) {
+        const float edge[]={.65f,.65f,.65f},idle[]={.28f,.28f,.28f},active[]={0,.32f,0};
+        const double y=status_bar_height();
+        text(239,y+38,"MAP CENTERING",white,130,10);
+        struct Button {double l,r;const char* label;bool selected;};
+        const Button buttons[]={{180,236,"AIRPLANE",view.follow},{238,294,"DEST",false},
+            {296,352,"CURSOR",!view.follow},{354,414,"CTR ON",false},{426,470,"PICK",false}};
+        for(const auto& b:buttons) {
+            rect(b.l,y+4,b.r,y+32,edge);rect(b.l+1,y+5,b.r-1,y+31,b.selected?active:idle);
+            const bool pick=b.l==426;
+            text((b.l+b.r-map_text_width(b.label,9))*.5,y+(pick?19:14),b.label,white,b.r-b.l-4,9);
+            if(pick)text((b.l+b.r-map_text_width("WPT",9))*.5,y+8,"WPT",white,b.r-b.l-4,9);
+        }
+    }
     if(a350_ui&&!(config.test&&nd)) {
         const auto& notice=a350_ui->plan_notice(mode,airport&&airport_outside_active_plan(fms_port.plan(),airport->icao));
         XPLMSetGraphicsState(0,1,0,0,1,0,0);XPLMBindTexture2d(map_font.texture(),0);
@@ -1517,10 +1706,10 @@ void draw_map(int id,bool nd) {
     }
 }
 // Convert the current virtual map rectangle to framebuffer scissor coordinates.
-void scissor_map() {
+void scissor_map(double top=600) {
     GLdouble model[16],proj[16],x[2],y[2],z;GLint viewport[4],previous[4];
     glGetDoublev(GL_MODELVIEW_MATRIX,model);glGetDoublev(GL_PROJECTION_MATRIX,proj);glGetIntegerv(GL_VIEWPORT,viewport);
-    gluProject(0,0,0,model,proj,viewport,&x[0],&y[0],&z);gluProject(600,600,0,model,proj,viewport,&x[1],&y[1],&z);
+    gluProject(0,0,0,model,proj,viewport,&x[0],&y[0],&z);gluProject(600,top,0,model,proj,viewport,&x[1],&y[1],&z);
     int l=static_cast<int>(std::floor(std::min(x[0],x[1]))),b=static_cast<int>(std::floor(std::min(y[0],y[1])));
     int r=static_cast<int>(std::ceil(std::max(x[0],x[1]))),t=static_cast<int>(std::ceil(std::max(y[0],y[1])));
     if(glIsEnabled(GL_SCISSOR_TEST)) {glGetIntegerv(GL_SCISSOR_BOX,previous);l=std::max(l,previous[0]);b=std::max(b,previous[1]);r=std::min(r,previous[0]+previous[2]);t=std::min(t,previous[1]+previous[3]);}
@@ -1570,13 +1759,28 @@ void render_rect(double l,double b,double width,double height,int id,bool nd) {
     GLint matrix_mode;glGetIntegerv(GL_MATRIX_MODE,&matrix_mode);glMatrixMode(GL_MODELVIEW);glPushMatrix();
     glTranslated(l,b,0);glScaled(width/600,height/600,1);
     render_aspect=nd?nd_aspect(id):1;
-    glPushAttrib(GL_SCISSOR_BIT|GL_LINE_BIT|GL_CURRENT_BIT);scissor_map();
+    glPushAttrib(GL_SCISSOR_BIT|GL_LINE_BIT|GL_CURRENT_BIT);
+    scissor_map(nd&&three_stage_nd()&&nd_on[id]==1?magknight::display::half_overlay_top:600);
     // Calibration geometry is bounded by the ND itself; omit our computed
     // scissor during this diagnostic to distinguish clipping from late redraw.
     if(nd&&config.test)glDisable(GL_SCISSOR_TEST);
     map_text=true;
     if(!nd||nd_on[id])draw_map(id,nd);
-    if(nd&&a350_ui) {
+    if(nd&&a350_ui&&three_stage_nd()&&nd_on[id]) {
+        const auto box=oans_hit_box(id);
+        const float edge[]={.55f,.55f,.55f},fill[]={.08f,.08f,.08f};
+        rect(box.l,box.b,box.r,box.t,edge);rect(box.l+1/nd_aspect(id),box.b+1,box.r-1/nd_aspect(id),box.t-1,fill);
+        const double x=(box.l+box.r)*.5,y=(box.b+box.t)*.5,a=nd_aspect(id);
+        if(nd_on[id]==1) {
+            for(int k=0;k<24;++k) {
+                const double p=k*2*pi/24,q=(k+1)*2*pi/24;
+                line({x+5*std::cos(p)/a,y+5*std::sin(p)}, {x+5*std::cos(q)/a,y+5*std::sin(q)},white,1.3);
+            }
+        } else {
+            line({x-6/a,y},{x-2/a,y-4},green,2);
+            line({x-2/a,y-4},{x+6/a,y+5},green,2);
+        }
+    } else if(nd&&a350_ui&&!three_stage_nd()) {
         if(!map_font.upload(XPLMGenerateTextureNumbers,XPLMBindTexture2d))
             throw std::runtime_error("A350 checkbox font atlas upload failed");
         XPLMSetGraphicsState(0,1,0,0,1,0,0);XPLMBindTexture2d(map_font.texture(),0);
@@ -1726,7 +1930,7 @@ int gauge_draw(XPLMDrawingPhase,int,void*) {
                 gluProject(l+uv[0]*w,b+uv[1]*h,0,model,projection,viewport,&trace.projected[side][0],&trace.projected[side][1],&z);
                 gluProject(l+uv[2]*w,b+uv[3]*h,0,model,projection,viewport,&trace.projected[side][2],&trace.projected[side][3],&z);
             }
-            if(rt==1) {if(nd_on[side])clear_nd_rect(l+uv[0]*w,b+uv[1]*h,(uv[2]-uv[0])*w,(uv[3]-uv[1])*h);}
+            if(rt==1) {if(nd_on[side])clear_nd_rect(l+uv[0]*w,b+uv[1]*h,(uv[2]-uv[0])*w,(uv[3]-uv[1])*h*(three_stage_nd()&&nd_on[side]==1?magknight::display::half_overlay_top/600:1));}
             else {
                 render_gain=std::clamp(aircraft_backend->brightness(aircraft_data,side,false),0.0,1.0);
                 render_rect(l+uv[0]*w,b+uv[1]*h,(uv[2]-uv[0])*w,(uv[3]-uv[1])*h,side,true);render_gain=1;
@@ -1790,7 +1994,7 @@ void update_click_projection() {
         std::array<Vec2,4> q;bool valid=true;
         for(int k=0;k<4;++k) {
             const auto& full=profile::current.nd_corners[side];
-            const auto v=three_stage_nd()?magknight::display::corner(full,k,nd_on[side],nd_half_right()):
+            const auto v=three_stage_nd()?magknight::display::corner(full,k,nd_on[side],nd_half_right(side)):
                 std::array<double,3>{full[k][0],full[k][1],full[k][2]};
             double e[4]={},c[4]={};
             for(int row=0;row<4;++row) {e[row]=a[12+row];for(int j=0;j<3;++j)e[row]+=a[j*4+row]*v[j];}
@@ -1814,15 +2018,16 @@ void pointer(int id,Vec2 p,Vec2 pixels,XPLMMouseStatus action,bool allow_actions
     OANS_TRACE_SCOPE();
     auto& s=views[id];auto& g=gestures[id];
     if(id<2) {
-        if(allow_actions&&action==xplm_MouseDown&&oans_hit_box(id).contains(p)) {
+        const bool switch_visible=!three_stage_nd()||nd_on[id]!=0;
+        if(allow_actions&&switch_visible&&action==xplm_MouseDown&&oans_hit_box(id).contains(p)) {
             g.begin(p,pixels,false);captured_view=id;return;
         }
-        if(allow_actions&&g.pressed&&oans_hit_box(id).contains(g.down)) {
+        if(allow_actions&&switch_visible&&g.pressed&&oans_hit_box(id).contains(g.down)) {
             g.move(pixels);
             if(action==xplm_MouseUp) {
                 const bool toggle=!g.moved&&oans_hit_box(id).contains(p);
                 release_input();
-                if(toggle) {toggle_nd(id);s.menu=false;
+                if(toggle) {if(three_stage_nd())nd_on[id]=nd_on[id]==1?2:1;else toggle_nd(id);s.menu=false;
                     status=!nd_on[id]?"OANS MAP OFF":three_stage_nd()?
                         (nd_on[id]==1?"OANS ND HALF DISPLAY":"OANS ND FULL DISPLAY"):"OANS MAP ON";}
             }
@@ -1831,7 +2036,17 @@ void pointer(int id,Vec2 p,Vec2 pixels,XPLMMouseStatus action,bool allow_actions
         if(!nd_available(id))return;
     }
     if(action==xplm_MouseDown) {
+        if(id<2&&three_stage_nd()&&nd_on[id]==2&&nd_mode(id)==4&&s.panel==Panel::closed&&
+           p.y>=status_bar_height()+4&&p.y<status_bar_height()+32&&p.x>=180&&p.x<470) {
+            if(allow_actions&&p.x<236)s.follow=true;
+            return; // remaining full-PLAN buttons are visual placeholders
+        }
+        // Placeholder buttons must not fall through to the header's existing
+        // orientation shortcut while their real actions are unimplemented.
+        if(id<2&&three_stage_nd()&&nd_on[id]!=0&&p.y>=568&&p.y<598&&
+           (nd_on[id]==1||((p.x>=185&&p.x<420)||(p.x>=548&&p.x<594))))return;
         auto frame=nd_controls(s,ui_model());
+        filter_aircraft_controls(id,frame);
         const auto* hit=frame.hit(p);
         if(p.y<status_bar_height()&&(!allow_actions||!hit||hit->action!=UiAction::panel_toggle&&hit->action!=UiAction::zoom_in&&hit->action!=UiAction::zoom_out))return;
         const bool map_area=p.y>=transform(id).bottom&&p.y<550&&(!s.menu||!allow_actions)&&!frame.hit(p)
@@ -1845,7 +2060,9 @@ void pointer(int id,Vec2 p,Vec2 pixels,XPLMMouseStatus action,bool allow_actions
     if(action!=xplm_MouseUp)return;
     const bool moved=g.moved;const Vec2 down=g.down;g.clear();captured_view=-1;
     if(moved||!allow_actions)return;
-    auto frame=nd_controls(s,ui_model());const auto* before=frame.hit(down);const auto* after=frame.hit(p);
+    auto frame=nd_controls(s,ui_model());
+    filter_aircraft_controls(id,frame);
+    const auto* before=frame.hit(down);const auto* after=frame.hit(p);
     if(before) {
         if(after&&before->action==after->action&&before->argument==after->argument&&after->enabled)ui_action(id,after->action,after->argument);
         return;
@@ -1869,7 +2086,7 @@ int overlay_click(XPLMWindowID,int x,int y,XPLMMouseStatus action,void*) {
         return 1;
     }
     for(int side=0;side<2;++side) {Vec2 p;if(!nd_point(side,x,y,p))continue;
-        if(!nd_on[side]&&!oans_hit_box(side).contains(p))continue;
+        if(!nd_on[side]&&(three_stage_nd()||!oans_hit_box(side).contains(p)))continue;
         if(config.test&&!oans_hit_box(side).contains(p)) {
             if(action==xplm_MouseDown) {++hit_count[side];std::ostringstream s;s<<"ND "<<side<<" click normalized="<<p.x/600<<','<<1-p.y/600;status=s.str();log(status);}
         } else {
@@ -1914,7 +2131,7 @@ int overlay_wheel(XPLMWindowID,int x,int y,int wheel,int clicks,void*) {
     for(int id=0;id<2;++id) {Vec2 p;if(!nd_available(id)||!nd_point(id,x,y,p)||oans_hit_box(id).contains(p))continue;
         if(p.y<status_bar_height())return 1;
         p.y-=status_bar_height();
-        if(!config.test&&!scroll_nd_dropdown(views[id],ui_model(),p,clicks)&&!config.scale_button)
+        if(!config.test&&!scroll_nd_dropdown(views[id],ui_model(),p,clicks)&&!config.scale_button&&!three_stage_nd())
             for(int i=0;i<std::min(10,std::abs(clicks));++i)zoom(views[id],clicks>0);
         return 1;
     }
@@ -1982,7 +2199,7 @@ int popup_wheel(XPLMWindowID w,int x,int y,int wheel,int clicks,void*) {
     OANS_TRACE_SCOPE();
     if(!enabled)return 1;
     Vec2 p;if(wheel==0&&popup_point(w,x,y,p)&&p.y>=status_bar_height()&&
-        !scroll_nd_dropdown(views[2],ui_model(),{p.x,p.y-status_bar_height()},clicks)&&!config.scale_button)
+        !scroll_nd_dropdown(views[2],ui_model(),{p.x,p.y-status_bar_height()},clicks)&&!config.scale_button&&!three_stage_nd())
         for(int i=0;i<std::min(10,std::abs(clicks));++i)zoom(views[2],clicks>0);
     return 1;
 }
@@ -2000,7 +2217,7 @@ void finish_advisory_test() {
         const auto found=std::find_if(airport->runways.begin(),airport->runways.end(),[&](const auto& r){return r.name==id;});
         const auto feature=std::find_if(map_features[0].begin(),map_features[0].end(),[&](const auto& f){return f.name==selected;});
         for(auto& view:views) {
-            view.follow=false;view.center=(found->start+found->end)*.5;view.range_nm=1;
+            view.follow=false;view.center=(found->start+found->end)*.5;view.range_nm=.5;
             view.feature_kind=0;
             view.feature_selection=feature==map_features[0].end()?-1:static_cast<int>(feature-map_features[0].begin());
         }
@@ -2438,10 +2655,10 @@ void menu_action(void*,void* item) {
         case 10:open_panel(1,Panel::map_data);break;
         case 11:open_panel(0,Panel::airport);break;
         case 12:open_panel(1,Panel::airport);break;
-        case 13:if(config.scale_button)zoom(views[0],true);break;
-        case 14:if(config.scale_button)zoom(views[0],false);break;
-        case 15:if(config.scale_button)zoom(views[1],true);break;
-        case 16:if(config.scale_button)zoom(views[1],false);break;
+        case 13:if(config.scale_button&&!three_stage_nd())zoom(views[0],true);break;
+        case 14:if(config.scale_button&&!three_stage_nd())zoom(views[0],false);break;
+        case 15:if(config.scale_button&&!three_stage_nd())zoom(views[1],true);break;
+        case 16:if(config.scale_button&&!three_stage_nd())zoom(views[1],false);break;
         case 17:views[0].follow=true;break;
         case 18:views[1].follow=true;break;
         case 19:toggle_test_window();break;
@@ -2618,6 +2835,14 @@ float tick(float elapsed,float,int,void*) {
         if(plan_context)airborne_open_locked=false;
         const bool airborne=dr("ground").numeric(2)&&value("ground",0)==0&&
             value("ground",1)==0&&value("ground",2)==0;
+        if(three_stage_nd()&&aircraft_ok&&dr("ground").numeric(0)&&dr("ground").numeric(1)&&dr("ground").numeric(2)) {
+            if(airborne)mk_was_airborne=true;
+            else if(mk_was_airborne) {
+                mk_was_airborne=false;
+                nearest_airport();
+                log("MAGKNIGHT touchdown: select nearest airport");
+            }
+        } else mk_was_airborne=false;
         const bool enroute=airborne&&aircraft_backend&&dr("plan_phase").numeric()&&
             plan_enroute_phase(aircraft_backend->id,value("plan_phase",0,-1));
         if(!position_ready&&!manual_airport&&!airport_position_pending)nearest_airport();
@@ -2667,6 +2892,8 @@ float tick(float elapsed,float,int,void*) {
         runway_advisory.update(advisory_airport.get(),advisory_input,elapsed);
         // Consume ready ownship runway geometry before handling touchdown.
         update_ecam_oans();
+        update_magknight_range();
+        if(three_stage_nd())views[2].range_nm=views[0].range_nm;
         if(landing_airport_pending&&index_ready) {
             std::optional<IndexEntry> target;
             const auto& plan=fms_port.plan();
@@ -2738,7 +2965,7 @@ float tick(float elapsed,float,int,void*) {
         } else if(!map_note.empty()&&airport&&map_icao==airport->icao&&map_icao==last_requested) {
             log(map_note);
         }
-        if(index_ready&&position_ready&&!airport_position_pending&&heartbeat>choose_at&&!manual_airport&&!airborne_open_locked&&!landing_airport_locked&&!landing_airport_pending&&input_owner<0) {
+        if(!three_stage_nd()&&index_ready&&position_ready&&!airport_position_pending&&heartbeat>choose_at&&!manual_airport&&!airborne_open_locked&&!landing_airport_locked&&!landing_airport_pending&&input_owner<0) {
             choose_at=heartbeat+airport_query_interval;
             std::optional<IndexEntry> target;
             {std::lock_guard<std::mutex> lock(db_mutex);
@@ -2773,6 +3000,7 @@ float tick(float elapsed,float,int,void*) {
 }
 void cleanup() {
     landing_airport_pending=false;landing_airport_locked=false;oans_ecam_phase=0;
+    mk_was_airborne=false;
     OANS_TRACE_SCOPE();
     enabled=false;fms_port.clear(true);release_input();finish_worker();
     traffic_targets.clear();
@@ -2900,11 +3128,14 @@ PLUGIN_API void XPluginReceiveMessage(XPLMPluginID from,int message,void* param)
     }
     if(message==XPLM_MSG_PLANE_UNLOADED&&reinterpret_cast<std::intptr_t>(param)==0) {
         oans_ecam_phase=0;
+        mk_was_airborne=false;
+        mk_range_control.reset();
         oans_arc[0]=oans_arc[1]=false;
         aircraft_ok=false;
     }
     if(message==XPLM_MSG_PLANE_LOADED&&reinterpret_cast<std::intptr_t>(param)==0) {
         oans_ecam_phase=0;
+        mk_was_airborne=false;
         oans_arc[0]=oans_arc[1]=false;
         status="AIRCRAFT RELOADED";bind_refs(false);aircraft_ok=false;bind_at=0;model_check_at=0;
     }

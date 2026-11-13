@@ -63,12 +63,12 @@ local LINE_CLASS = { [1] = "cl", [10] = "cl", [51] = "cl", [60] = "cl",
                      [7] = "cl", [11] = "cl", [57] = "cl", [61] = "cl",
                      [2] = "dy", [8] = "dy", [9] = "dy", [52] = "dy", [58] = "dy", [59] = "dy",
                      [20] = "ws", [21] = "ws", [22] = "wd",
-                     [4] = "hold", [5] = "hold", [12] = "hold", [13] = "hold",
-                     [54] = "hold", [55] = "hold", [62] = "hold", [63] = "hold",
+                     [4] = "hold", [5] = "taxi_hold", [12] = "hold", [13] = "taxi_hold",
+                     [54] = "hold", [55] = "taxi_hold", [62] = "hold", [63] = "taxi_hold",
                      [6] = "ils_hold", [14] = "ils_hold", [56] = "ils_hold", [64] = "ils_hold" }'''),
         ('''local G = { pave = {}, pave_m = {}, pave_c = {}, polys = {}, tl = {}, tl_m = {}, tl_c = {}, hold = {}, stands = {}, terms = {},''',
          '''local G = { pave = {}, pave_m = {}, pave_c = {}, polys = {}, tl = {}, tl_m = {}, tl_c = {}, hold = {},
-                ils_hold = {}, stands = {}, terms = {},'''),
+                ils_hold = {}, taxi_hold = {}, stands = {}, terms = {},'''),
         ('if nd.lt and LINE_CLASS[nd.lt] == "cl" then has_paint = true; break end',
          'if nd.lt and LINE_CLASS[nd.lt] then has_paint = true; break end'),
         ('''                else
@@ -76,6 +76,8 @@ local LINE_CLASS = { [1] = "cl", [10] = "cl", [51] = "cl", [60] = "cl",
                 end''',
          '''                elseif cur == "ils_hold" then
                     add_chunks(G.ils_hold, rx, ry)
+                elseif cur == "taxi_hold" then
+                    add_chunks(G.taxi_hold, rx, ry)
                 else
                     add_chunks(G.hold, rx, ry)
                 end'''),
@@ -125,6 +127,10 @@ local LINE_CLASS = { [1] = "cl", [10] = "cl", [51] = "cl", [60] = "cl",
     parts.append('\nA350_buildings_build = buildings_build\nA350_osm_build = buildings_build\nend\n')
     take(4002, 4199, 'font definitions and metrics')
     take(4242, 4704, 'palette, draw buffer, clipping, antialiasing, text, ownship', [
+        # Submit partially visible rotated glyphs; the host viewport scissor
+        # clips the excess instead of dropping a whole character at the edge.
+        ('if mnx >= 0 and mxx <= W and mny >= 0 and mxy <= Hh then',
+         'if mxx > 0 and mnx < W and mxy > 0 and mny < Hh then'),
         # Supplied cockpit reference: runway pavement is light grey-white,
         # distinct from taxiway/apron pavement; retain white runway markings.
         ('runway = 0xFF5E5E5E', 'runway = 0xFFC8C8C8'),
@@ -325,9 +331,15 @@ end'''),
          'if in_view(b.minx, b.miny, b.maxx, b.maxy) then if not draw_building(b, MC.terminal, lim) then break end end'),
         ('if not draw_tris(b.tris, MC.building, lim) then break end',
          'if not draw_building(b, MC.building, lim) then break end'),
+        ('if sc >= 0.12 then', 'if sc >= 0.12 or C.boeing then'),
         ('''            if sc >= 0.25 then stroke({ G.hold }, MC.hold, (sc >= 0.9) and 3 or 2, 1, math.max(0, BULK - DL.n)) end''',
-         '''            if sc >= 0.18 then stroke({ G.ils_hold }, MC.taxiline, th, md2, math.max(0, BULK - DL.n) * 0.18) end
-            if sc >= 0.25 then stroke({ G.hold }, MC.hold, (sc >= 0.9) and 3 or 2, 1, math.max(0, BULK - DL.n)) end''')
+         '''            if C.boeing then
+                if C.rng <= 2 then stroke({ G.hold, G.ils_hold }, 0xFF00A5FF, 0.6, 1, math.max(0, BULK - DL.n)) end
+                if C.rng <= 1 then stroke({ G.taxi_hold }, 0xFF00A5FF, 0.6, 1, math.max(0, BULK - DL.n)) end
+            else
+                if sc >= 0.18 then stroke({ G.ils_hold }, MC.taxiline, th, md2, math.max(0, BULK - DL.n) * 0.18) end
+                if sc >= 0.25 then stroke({ G.hold, G.taxi_hold }, MC.hold, (sc >= 0.9) and 3 or 2, 1, math.max(0, BULK - DL.n)) end
+            end''')
     ])
     take(5754, 5806, 'QFU labels with pointed open frame and larger FMS arrow', [
         ('local cap = TXT.cap', 'local cap = 8.0'),
@@ -357,7 +369,64 @@ end'''),
         ('DL.circlef(px, py, 1.6, MC.mag, 8)', 'DL.circlef(px, py, 1.6, MC.green, 8)')
     ])
     parts.append('\nlocal NDUI = {}\n')
-    take(6301, 6397, 'ND compass')
+    take(6301, 6397, 'ND compass', [
+        ('local rs = (C.rng >= 1 and C.rng == math.floor(C.rng)) and string.format("%d", C.rng) or string.format("%.1f", C.rng)',
+         'local rs = string.format("%.2f", C.rng):gsub("0+$", ""):gsub("%.$", "")'),
+        ('    local cap = TXT.cap\n', '''    local cap = TXT.cap
+    local function range_label(cx, cy, label)
+        local w = text_w(label, cap)
+        local x, y = cx - w / 2, cy - FONT_H / 2
+        -- Opaque black backing keeps the cyan range legible over airport geometry.
+        DL.rectf(x - 1, cy - cap / 2 - 1, x + w + 1, cy + cap / 2 + 1, MC.bg)
+        DL.text(x, y, MC.sel, label, cap)
+    end
+'''),
+        ('DL.text(lx - text_w(rs, cap) / 2, ly - FONT_H / 2, MC.sel, rs, cap)',
+         'range_label(lx, ly, rs)'),
+        ('''        -- Reichweite links und rechts am halben Ring (wie "5" / "7.5" im FF-ND)
+        for _, a in ipairs({ -52, 52 }) do
+            local t = a * D2R
+            local lx, ly = ax + (R / 2 + 9) * math.sin(t), ay - (R / 2 + 9) * math.cos(t)
+            DL.text(lx - text_w(hs, cap) / 2, ly - FONT_H / 2, MC.sel, hs, cap)
+        end''', '''        -- ARC shows the full outer-ring distance once, at the left of the arc.
+        local t = -60 * D2R
+        local lx = math.max((C.x0 or 0) + text_w(rs, cap) / 2 + 2, ax + (R - 8) * math.sin(t))
+        local ly = ay - (R - 8) * math.cos(t)
+        range_label(lx, ly, rs)'''),
+        ('''        local lx, ly = ax + (R / 2 + 9) * math.sin(th), ay - (R / 2 + 9) * math.cos(th)
+        DL.text(lx - text_w(hs, cap) / 2, ly - FONT_H / 2, MC.sel, hs, cap)''',
+         '''        -- ROSE NAV shows the full outer-ring distance at the lower left.
+        local lx, ly = ax + (R - 16) * math.sin(th), ay - (R - 16) * math.cos(th)
+        range_label(lx, ly, rs)'''),
+        ('''    local half = C.rng / 2
+    local hs = (half >= 1) and ((math.abs(half * 10 - math.floor(half * 10 + 0.5)) < 1e-6) and string.format("%.1f", half)
+        or string.format("%.2f", half)) or ((half >= 0.1) and string.format("%.2f", half):gsub("0$", "") or string.format("%.2f", half))
+''', ''),
+        ('DL.line(ax + R * sx, ay + R * sy, ax + (R - l) * sx, ay + (R - l) * sy, MC.ring, 1.0)',
+         'DL.line(ax + R * sx, ay + R * sy, ax + (R + l) * sx, ay + (R + l) * sy, MC.ring, 1.0)'),
+        ('local l = (deg % 10 == 0) and 7 or 4',
+         'local l = (deg % 10 == 0) and 5 or 2.5 -- ToLiss ROSE: 10 / 5 host pixels after the 2x adapter.'),
+        ('DL.line(ax + R * sx, ay + R * sy, ax + (R - l) * sx, ay + (R - l) * sy, MC.ring, 0.9)',
+         'DL.line(ax + R * sx, ay + R * sy, ax + (R + l) * sx, ay + (R + l) * sy, MC.ring, 0.9)'),
+        ('local lx, ly = ax + (R - 15) * sx, ay + (R - 15) * sy',
+         'local lx, ly = ax + (R + 15) * sx, ay + (R + 15) * sy'),
+        ('''            if deg % 45 == 0 then
+                local px, py = ax + (R + 2) * sx, ay + (R + 2) * sy
+                DL.tri(px, py, px + sx * 6 - sy * 3, py + sy * 6 + sx * 3, px + sx * 6 + sy * 3, py + sy * 6 - sx * 3, MC.ring)
+            end
+        end''',
+         '''        end
+        -- Fixed relative-bearing markers; the heading scale turns underneath.
+        -- Keep every tick: near alignment exposes its side, as at 88/89 degrees.
+        for deg = 0, 315, 45 do
+            local t = deg * D2R
+            local sx, sy = math.sin(t), -math.cos(t)
+            -- Reference: triangle and long tick have equal radial height.
+            local px, py = ax + R * sx, ay + R * sy
+            NDUI.rose_marker(px, py, px + sx * 5 - sy * 2.9, py + sy * 5 + sx * 2.9,
+                px + sx * 5 + sy * 2.9, py + sy * 5 - sx * 2.9, MC.ring)
+        end''')
+    ])
     take(8355, 8419, 'font atlas loader')
     parts.append((ROOT / 'src/a350_adapter.lua').read_text(encoding='utf-8'))
     # Strip retired brake/exit overlays while retaining OANS runway labels.

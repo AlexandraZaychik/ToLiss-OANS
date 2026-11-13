@@ -75,3 +75,34 @@ assert(max_t == math.floor(xhigh_t * 1.5), 'max fill allowance is not +50%')
 assert(max_l > xhigh_l and ultra_l == 10000, 'edge budget / ultra clipping')
 assert(ultra_t == 10000, 'ultra fill was budget clipped')
 print('PASS pavement quality: 24 range/quality combinations, default, scale independence, unchanged widths, +50% and unlimited budgets')
+-- 787 range gates: runway/ILS holding lines at 2 NM and taxi holds at 1 NM.
+local function holding_count(range, boeing)
+    dl.n, lines = 0, 0
+    local g={road={},wline={},dash_y={},tw_net={},tl={},tl_m={},
+        hold=edges(1),ils_hold=edges(1),taxi_hold=edges(1)}
+    local c={G=g,XY=function(x,y) return x,y end,sc=0.1,x0=0,y0=0,cw=300,ch=300,
+        vminx=0,vmaxx=100,vminy=0,vmaxy=100,rng=range,boeing=boeing}
+    local steps=map.surface_steps(c)
+    assert(steps[7]())
+    return lines
+end
+assert(holding_count(5,true)==0, '787 holding lines must be hidden at 5 NM')
+assert(holding_count(2,true)==2, '787 runway and ILS holding lines must show at 2 NM')
+assert(holding_count(1,true)==3 and holding_count(0.5,true)==3, '787 taxi holding line must show at 1 and 0.5 NM')
+assert(holding_count(2,false)==0, 'other aircraft keep scale-based holding lines')
+print('PASS 787 holding-line range gates')
+local boeing_labels = upvalue(a350_render, 'boeing_labels')
+dl.panel = true
+local labels = {}
+dl.text = function(_, _, _, name) labels[#labels+1]=name end
+local function stand_labels(range)
+    labels={}
+    local c={rng=range,G={stand_lbls={{x=50,y=50,text='C4'}},lbl={}},vis={},
+        x0=0,cw=300,map_bottom=300,vminx=0,vmaxx=100,vminy=0,vmaxy=100,
+        XY=function(x,y) return x,y end,placed={},sc=0.1}
+    boeing_labels(c)
+    return #labels
+end
+assert(stand_labels(1)==0 and stand_labels(2)==0 and stand_labels(5)==0, '787 stands hidden above 0.5 NM')
+assert(stand_labels(0.5)==1 and labels[1]=='C4', '787 stand label visible at 0.5 NM')
+print('PASS 787 stand-label range gate')

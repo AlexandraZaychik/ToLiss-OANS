@@ -77,7 +77,16 @@ def audit(aircraft, config):
         measured = [min(v[6] for v in matched), min(v[7] for v in matched),
                     max(v[6] for v in matched), max(v[7] for v in matched)]
         assert max(abs(a - b) for a, b in zip(uv, measured)) < 2e-6
-        assert profile["nd_corners"][1] == profile["nd_corners"][0], "FO remains a disabled placeholder"
+        fo_matched = []
+        for corner in profile["nd_corners"][1]:
+            raw = [corner[a] - offset[a] for a in range(3)]
+            v = min(vertices, key=lambda candidate: math.dist(candidate[:3], raw))
+            assert math.dist(v[:3], raw) < 2e-6, (model, "FO corner differs from panel")
+            fo_matched.append(v)
+        fo_uv = profile["nd_uv"][0][1]
+        fo_measured = [min(v[6] for v in fo_matched), min(v[7] for v in fo_matched),
+                       max(v[6] for v in fo_matched), max(v[7] for v in fo_matched)]
+        assert max(abs(a - b) for a, b in zip(fo_uv, fo_measured)) < 2e-6
         result["models"].append({"model": model, "authored_icao": icao,
                                   "acf_sha256": hashlib.sha256(acf.read_bytes()).hexdigest(),
                                   "cg_y_ft": float(p["acf/_cgY"]), "cg_z_ft": float(p["acf/_cgZ"]),

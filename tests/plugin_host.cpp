@@ -20,6 +20,7 @@ int main(int argc,char** argv){
   function<void(*)()>(mock,"MockInitFms")();
   auto set=function<void(*)(const char*,int,double)>(mock,"MockSet");
   auto advance=function<void(*)(float)>(mock,"MockAdvance");
+  auto get=function<double(*)(const char*,int)>(mock,"MockGet");
   auto cmd=function<void(*)(const char*)>(mock,"MockCommand");
   auto focus=function<int(*)()>(mock,"MockFocus");auto key=function<void(*)(int)>(mock,"MockKey");
   auto resources=function<int(*)()>(mock,"MockResources");auto writes=function<int(*)()>(mock,"MockSetters");
@@ -41,7 +42,8 @@ int main(int argc,char** argv){
   if(magknight) {
    verify(!mk_id.empty(),"valid Magknight fixture identity");
    set_icao(mode=="magknight-corrected-icao"?"B78X":mk_id=="B78X"?"B789":mk_id.c_str());
-   set("aero787/cockpit/mfd/defaultNavDisplays",0,1);
+   set("aero787/cockpit/mfd/defaultNavDisplays",0,1);set("aero787/cockpit/mfd/defaultNavDisplays",4,1);
+   set("aero787/cockpit/lights/inbdDisplayR",0,5);
    set("aero787/nav/irs/aligned",0,1);set("aero787/cockpit/lights/inbdDisplayL",0,5);
    set("sim/cockpit2/EFIS/map_range_nm",0,5);set("sim/cockpit2/EFIS/map_mode",0,2);
   }
@@ -56,19 +58,74 @@ int main(int argc,char** argv){
   verify(start(name,sig,desc)==1&&enable()==1,"start and enable");
   if(magknight) {
    wait(60);
+   set("sim/flightmodel2/gear/on_ground",0,1);
+   set("sim/flightmodel/position/latitude",0,30);set("sim/flightmodel/position/longitude",0,120.012);
+   cmd("toliss_oans/nearest");wait(100);
+   verify(report().find("airport=ZTEST")!=std::string::npos,"787 initial nearest airport");
+   set("sim/flightmodel2/gear/on_ground",0,0);wait(2);
+   set("sim/flightmodel/position/latitude",0,31.01);set("sim/flightmodel/position/longitude",0,120);
+   wait(320);
+   verify(report().find("airport=ZTEST")!=std::string::npos,"787 retains airport in flight beyond periodic interval");
+   set("sim/flightmodel2/gear/on_ground",0,1);wait(100);
+   verify(report().find("airport=ZALT")!=std::string::npos,"787 touchdown selects nearest airport");
+   set("sim/flightmodel2/gear/on_ground",0,0);wait(2);
+   set("sim/flightmodel/position/latitude",0,30.21);wait(2);
+   verify(report().find("airport=ZALT")!=std::string::npos,"787 retains landing airport during go-around");
+   set("sim/flightmodel2/gear/on_ground",0,1);wait(100);
+   verify(report().find("airport=ZNEAR")!=std::string::npos,"787 second touchdown selects alternate airport");
+   set("sim/cockpit/switches/EFIS_map_range_selector",0,3);wait(2);
+   if(report().find("ND_state side=0 enabled=1")!=std::string::npos) {
+    while(report().find("ND_state side=0 enabled=1")!=std::string::npos)cmd("toliss_oans/capt_nd");
+   }
+   set("sim/cockpit2/EFIS/map_range_nm",0,10);
+   cmd("toliss_oans/capt_nd");
+   verify(report().find("ND_state side=0 enabled=0")!=std::string::npos,"above 5 NM command cannot open OANS");
+   set("sim/cockpit2/EFIS/map_range_nm",0,5);
    verify(report().find("AIRCRAFT_BACKEND id=magknight")!=std::string::npos,"Magknight adapter detected");
-   verify(report().find("MAGKNIGHT_"+mk_id+" experimental=1 captain_only=1 fms=unavailable")!=std::string::npos,"canonical model profile selected independently of active ICAO");
+   verify(report().find("MAGKNIGHT_"+mk_id+" experimental=1 captain_only=0 fms=unavailable")!=std::string::npos,"canonical model profile selected independently of active ICAO");
    auto profile_name=mk_id;for(auto& c:profile_name)c=static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
    verify(read(package/"diagnostics.log").find(profile_name+".json")!=std::string::npos,"model-specific profile loaded");
    for(int expected:{0,1,2,0,1,2,0}) {
     const auto state=report();
-    verify(state.find("OANS_switch side=0 visible=1 checked="+std::to_string(expected!=0)+" display_mode="+std::to_string(expected))!=std::string::npos,"B788 actual command cycles off / half / full");
-    verify(state.find("ND_state side=1 enabled=0 blocked=MAGKNIGHT 787 FO ND NOT YET ADAPTED")!=std::string::npos,"787 FO remains unavailable");
+    verify(state.find("OANS_switch side=0 visible="+std::to_string(expected!=0)+" checked="+std::to_string(expected==2)+" display_mode="+std::to_string(expected))!=std::string::npos,"B788 actual command cycles off / half / full");
+    verify(state.find("ND_state side=1 enabled=0 blocked=")!=std::string::npos,"787 FO interface available");
     cmd("toliss_oans/capt_nd");
    }
+   for(int expected:{0,1,2,0}) {
+    const auto state=report();
+    verify(state.find("OANS_switch side=1 visible="+std::to_string(expected!=0)+" checked="+std::to_string(expected==2)+" display_mode="+std::to_string(expected))!=std::string::npos,"787 FO cycles off / half / full");
+    cmd("toliss_oans/fo_nd");
+   }
+   cmd("toliss_oans/fo_nd");cmd("toliss_oans/fo_nd");
+   set("aero787/cockpit/lights/inbdDisplayR",0,0);
+   verify(report().find("ND_state side=1 enabled=0 blocked=MAGKNIGHT 787 DISPLAY OFF OR IRS UNALIGNED")!=std::string::npos,"FO brightness gates FO only");
+   set("aero787/cockpit/lights/inbdDisplayR",0,5);
+   // Exercise the real flight-loop controller, including selector writes.
+   set("sim/cockpit/switches/EFIS_map_range_selector",0,1);
+   set("sim/flightmodel2/gear/on_ground",0,1);wait(2);
+   verify(report().find("view=0 panel=0 range_nm=5")!=std::string::npos,"ground auto opens at 5 NM");
+   for(double expected:{2.,1.,.5}) {
+    set("sim/cockpit/switches/EFIS_map_range_selector",0,0);wait(2);
+    verify(get("sim/cockpit/switches/EFIS_map_range_selector",0)==1,"inward turn recenters selector");
+    std::ostringstream wanted;wanted<<"view=0 panel=0 range_nm="<<expected;
+    verify(report().find(wanted.str())!=std::string::npos,"inward turn advances OANS range");
+   }
+   for(double expected:{1.,2.,5.}) {
+    set("sim/cockpit/switches/EFIS_map_range_selector",0,2);wait(2);
+    verify(get("sim/cockpit/switches/EFIS_map_range_selector",0)==1,"outward turn recenters selector");
+    std::ostringstream wanted;wanted<<"view=0 panel=0 range_nm="<<expected;
+    verify(report().find(wanted.str())!=std::string::npos,"outward turn advances OANS range");
+   }
+   set("sim/cockpit/switches/EFIS_map_range_selector",0,2);wait(2);
+   verify(get("sim/cockpit/switches/EFIS_map_range_selector",0)==2&&report().find("ND_state side=0 enabled=0")!=std::string::npos,"outward turn at 5 exits to aircraft 10");
+   set("sim/flightmodel2/gear/on_ground",0,0);wait(2);
+   cmd("toliss_oans/capt_nd");
+   verify(report().find("ND_state side=0 enabled=0")!=std::string::npos,"airborne command cannot open OANS");
+   set("sim/flightmodel2/gear/on_ground",0,1);
+   cmd("toliss_oans/capt_nd");
    for(double range:{.5,1.,2.5,5.}) {
     set("sim/cockpit2/EFIS/map_range_nm",0,range);
-    verify(report().find("OANS_switch side=0 visible=1 checked=1 display_mode=1")!=std::string::npos,"B788 range up to 5 NM enables overlay");
+    verify(report().find("OANS_switch side=0 visible=1 checked=0 display_mode=1")!=std::string::npos,"B788 range up to 5 NM enables overlay");
    }
    for(double range:{0.,-1.,5.0001,10.,20.}) {
     set("sim/cockpit2/EFIS/map_range_nm",0,range);
@@ -76,7 +133,7 @@ int main(int argc,char** argv){
    }
    set("sim/cockpit2/EFIS/map_range_nm",0,5);
    set("aero787/cockpit/mfd/defaultNavDisplays",0,0);set("aero787/cockpit/mfd/defaultNavDisplays",1,1);
-   verify(report().find("OANS_switch side=0 visible=1 checked=1 display_mode=1")!=std::string::npos,"right ND pane remains available");
+   verify(report().find("OANS_switch side=0 visible=1 checked=0 display_mode=1")!=std::string::npos,"right ND pane remains available");
    set("aero787/cockpit/mfd/defaultNavDisplays",1,0);
    verify(report().find("blocked=MAGKNIGHT 787 NAV DISPLAY NOT ACTIVE")!=std::string::npos,"no active ND pane hides overlay");
    set("aero787/cockpit/mfd/defaultNavDisplays",0,1);

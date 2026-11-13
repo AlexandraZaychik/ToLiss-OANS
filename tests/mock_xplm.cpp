@@ -206,7 +206,7 @@ XPLMDataRef XPLMFindDataRef(const char* name) {
     if(n.find("DUBrightness")!=std::string::npos) {d.values.assign(8,1);d.type=xplmType_FloatArray;}
     if(n=="sim/cockpit2/switches/instrument_brightness_ratio") {d.values.assign(32,1);d.type=xplmType_FloatArray;}
     if(n=="aero787/cockpit/mfd/defaultNavDisplays") {d.values.assign(6,0);d.type=xplmType_IntArray;}
-    if(n=="sim/cockpit2/switches/beacon_on")d.type=xplmType_Int;
+    if(n=="sim/cockpit2/switches/beacon_on"||n=="sim/cockpit/switches/EFIS_map_range_selector")d.type=xplmType_Int;
     if(n=="sim/cockpit2/switches/landing_lights_switch") {d.values.assign(16,0);d.type=xplmType_FloatArray;}
     if(n.find("bus_volts")!=std::string::npos) {d.values.assign(2,28);d.type=xplmType_FloatArray;}
     if(n.find("matrix")!=std::string::npos) {d.values.resize(16);d.type=xplmType_FloatArray;}

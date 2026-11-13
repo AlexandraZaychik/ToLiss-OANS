@@ -49,7 +49,7 @@ bool A350View::reusable_with(const A350View& o) const {
     return translation+rotation<error_px&&ownship+rotation+plane_turn<error_px&&compass_turn<error_px;
 }
 bool A350View::same_map_content(const A350View& o) const {
-    if(simple_stand_names!=o.simple_stand_names||detail_quality!=o.detail_quality)return false;
+    if(simple_stand_names!=o.simple_stand_names||detail_quality!=o.detail_quality||boeing_full_compass!=o.boeing_full_compass)return false;
     if(runway_ahead.size()!=o.runway_ahead.size())return false;
     for(size_t i=0;i<runway_ahead.size();++i)
         if(runway_ahead[i].first!=o.runway_ahead[i].first||runway_ahead[i].second!=o.runway_ahead[i].second)return false;
@@ -240,7 +240,7 @@ const std::vector<A350Vertex>& A350Map::render_impl(int side,const A350View& vie
     p.string(view.fms_airport);p.string(view.fms_runway);p.alerts(view.runway_ahead);lua_pushboolean(L,view.alert_blink);
     lua_pushboolean(L,view.outside_plan);p.string(view.map_runway);p.traffic(view.traffic);
     lua_pushboolean(L,view.position_valid);lua_pushboolean(L,view.simple_stand_names);lua_pushinteger(L,layer);
-    lua_pushinteger(L,view.detail_quality);lua_pushnumber(L,view.width);p.check(lua_pcall(L,28,3,0));
+    lua_pushinteger(L,view.detail_quality);lua_pushnumber(L,view.width);lua_pushboolean(L,view.boeing_full_compass);p.check(lua_pcall(L,29,3,0));
     OANS_TRACE("Lua a350_render complete; reading buffers");
     p.draw_buffer.copy(L,cache.vertices);
     cache.label_vertices.clear();
