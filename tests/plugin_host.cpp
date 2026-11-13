@@ -6,11 +6,13 @@
 #include <vector>
 #include "test_support.hpp"
 #include "menu_layout.hpp"
+#include "aircraft/magknight/identity.hpp"
 template<class T>T function(HMODULE module,const char* name){auto p=GetProcAddress(module,name);verify(p!=nullptr,std::string("missing export ")+name);return reinterpret_cast<T>(p);}
 int main(int argc,char** argv){
  SetErrorMode(SEM_FAILCRITICALERRORS|SEM_NOGPFAULTERRORBOX|SEM_NOOPENFILEERRORBOX);
  if(argc!=5&&argc!=6)return 2;
  const std::string mode=argc==6?argv[5]:"";
+ const bool magknight=mode.rfind("magknight",0)==0;
  HMODULE mock=nullptr,plugin=nullptr;void(*stop)()=nullptr;
  try{
   mock=LoadLibraryExW(std::filesystem::u8path(argv[1]).c_str(),nullptr,LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR|LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);verify(mock!=nullptr,"load mock SDK");
@@ -35,14 +37,82 @@ int main(int argc,char** argv){
   char name[256],sig[256],desc[256];
   auto start=function<int(*)(char*,char*,char*)>(plugin,"XPluginStart");
   auto set_icao=function<void(*)(const char*)>(mock,"MockAircraftIcao");
+  const auto mk_id=magknight?oans::magknight::identify(std::filesystem::u8path(argv[4])):std::string{};
+  if(magknight) {
+   verify(!mk_id.empty(),"valid Magknight fixture identity");
+   set_icao(mode=="magknight-corrected-icao"?"B78X":mk_id=="B78X"?"B789":mk_id.c_str());
+   set("aero787/cockpit/mfd/defaultNavDisplays",0,1);
+   set("aero787/nav/irs/aligned",0,1);set("aero787/cockpit/lights/inbdDisplayL",0,5);
+   set("sim/cockpit2/EFIS/map_range_nm",0,5);set("sim/cockpit2/EFIS/map_mode",0,2);
+  }
   if(mode=="a359"||mode=="a35k") {
    set_icao(mode=="a359"?"A359":"A35K");
    verify(start(name,sig,desc)==0,"A350 startup rejected");stop=nullptr;
    verify(resources()==0,"blocked startup registers no resources");
    FreeLibrary(plugin);FreeLibrary(mock);return 0;
   }
-  scenario((mode.empty()||mode=="language")?"native/cold-start-position-confirmation":"native/cache/"+mode);
+  if(mode!="a350-switch"&&!magknight)
+   scenario((mode.empty()||mode=="language")?"native/cold-start-position-confirmation":"native/cache/"+mode);
   verify(start(name,sig,desc)==1&&enable()==1,"start and enable");
+  if(magknight) {
+   wait(60);
+   verify(report().find("AIRCRAFT_BACKEND id=magknight")!=std::string::npos,"Magknight adapter detected");
+   verify(report().find("MAGKNIGHT_"+mk_id+" experimental=1 captain_only=1 fms=unavailable")!=std::string::npos,"canonical model profile selected independently of active ICAO");
+   auto profile_name=mk_id;for(auto& c:profile_name)c=static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+   verify(read(package/"diagnostics.log").find(profile_name+".json")!=std::string::npos,"model-specific profile loaded");
+   for(int expected:{0,1,2,0,1,2,0}) {
+    const auto state=report();
+    verify(state.find("OANS_switch side=0 visible=1 checked="+std::to_string(expected!=0)+" display_mode="+std::to_string(expected))!=std::string::npos,"B788 actual command cycles off / half / full");
+    verify(state.find("ND_state side=1 enabled=0 blocked=MAGKNIGHT 787 FO ND NOT YET ADAPTED")!=std::string::npos,"787 FO remains unavailable");
+    cmd("toliss_oans/capt_nd");
+   }
+   for(double range:{.5,1.,2.5,5.}) {
+    set("sim/cockpit2/EFIS/map_range_nm",0,range);
+    verify(report().find("OANS_switch side=0 visible=1 checked=1 display_mode=1")!=std::string::npos,"B788 range up to 5 NM enables overlay");
+   }
+   for(double range:{0.,-1.,5.0001,10.,20.}) {
+    set("sim/cockpit2/EFIS/map_range_nm",0,range);
+    verify(report().find("ND_state side=0 enabled=1 blocked=SET PHYSICAL ND RANGE TO 5 NM OR LESS")!=std::string::npos,"B788 larger or invalid range hides overlay");
+   }
+   set("sim/cockpit2/EFIS/map_range_nm",0,5);
+   set("aero787/cockpit/mfd/defaultNavDisplays",0,0);set("aero787/cockpit/mfd/defaultNavDisplays",1,1);
+   verify(report().find("OANS_switch side=0 visible=1 checked=1 display_mode=1")!=std::string::npos,"right ND pane remains available");
+   set("aero787/cockpit/mfd/defaultNavDisplays",1,0);
+   verify(report().find("blocked=MAGKNIGHT 787 NAV DISPLAY NOT ACTIVE")!=std::string::npos,"no active ND pane hides overlay");
+   set("aero787/cockpit/mfd/defaultNavDisplays",0,1);
+   set("aero787/nav/irs/aligned",0,0);
+   verify(report().find("blocked=MAGKNIGHT 787 DISPLAY OFF OR IRS UNALIGNED")!=std::string::npos,"IRS gates every variant");
+   set("aero787/nav/irs/aligned",0,1);set("aero787/cockpit/lights/inbdDisplayL",0,0);
+   verify(report().find("blocked=MAGKNIGHT 787 DISPLAY OFF OR IRS UNALIGNED")!=std::string::npos,"display brightness gates every variant");
+   set("aero787/cockpit/lights/inbdDisplayL",0,5);set("sim/cockpit2/EFIS/map_mode",0,0);
+   verify(report().find("blocked=SELECT MAP / PLAN")!=std::string::npos,"unsupported map mode hides overlay");
+   set("sim/cockpit2/EFIS/map_mode",0,4);
+   verify(report().find("OANS_switch side=0 visible=1")!=std::string::npos,"PLAN supported");
+   if(mode=="magknight") {
+    // Both stretched variants declare B789: a same-ICAO aircraft reload must
+    // replace the model identity and CG-relative profile, including switch-back.
+    for(const auto& id:{"B789","B78X","B788"}) {
+     const auto model=std::filesystem::u8path(argv[4]).parent_path()/(std::string(id)+".acf");
+     configure(argv[2],argv[3],model.u8string().c_str());set_icao(std::string(id)=="B78X"?"B789":id);
+     message(0,106,nullptr);message(0,102,nullptr);wait(60);
+     verify(report().find("MAGKNIGHT_"+std::string(id)+" experimental=1")!=std::string::npos,"aircraft reload replaces canonical model identity");
+     verify(report().find("OANS_switch side=0 visible=1")!=std::string::npos,"reloaded variant retains available display interface");
+    }
+    // Invalid/missing profiles must clear old geometry, never reuse B788.
+    const auto profile=package/"config/magknight/b78x.json";
+    const auto original=read(profile);
+    {std::ofstream f(profile);f<<"{}";}
+    const auto model=std::filesystem::u8path(argv[4]).parent_path()/"B78X.acf";
+    configure(argv[2],argv[3],model.u8string().c_str());set_icao("B789");
+    message(0,106,nullptr);message(0,102,nullptr);wait(60);
+    const auto failed=report();
+    {std::ofstream f(profile);f<<original;}
+    verify(failed.find("MAGKNIGHT_UNKNOWN experimental=1")!=std::string::npos&&failed.find("blocked=AIRCRAFT PROFILE UNAVAILABLE")!=std::string::npos,"broken B78X profile cannot fall back to B788");
+   }
+   disable();stop();stop=nullptr;verify(resources()==0,"B788 stop releases resources");
+   std::cout<<"PASS "<<mk_id<<" three-stage switch, both navigation panes, display gating, model profile and cleanup\n";
+   FreeLibrary(plugin);FreeLibrary(mock);return 0;
+  }
   if(mode=="a350-switch") {
    set_icao("A359");message(0,102,nullptr);verify(enable()==0,"A359 cannot be enabled after switching");
    set_icao("A320");verify(enable()==1,"non-A350 can be enabled");

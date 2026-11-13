@@ -2,8 +2,9 @@
 
 oans for:\
 ~ ToLiss all series\
-~ Laminar Research B330\
-~ Zibo A737\
+~ Laminar Research A330\
+~ Zibo B737\
+~ MK B787
 some code from A350，with some small fix and small improve\
 license under GPLv3, due to A350 get some idea from FBW A380 which is GPLv3
 

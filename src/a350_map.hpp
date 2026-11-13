@@ -17,6 +17,7 @@ struct A350View {
     Vec2 center,anchor{300,285};
     double scale=1,angle=0,lat=0,lon=0,psi=0,mag=0,range=1;
     double radius=0,bottom=40; // zero radius selects the legacy closed viewport
+    double width=600; // isotropic map canvas, centred at x=300
     int mode=4;
     std::string fms_airport,fms_runway,map_runway;
     std::vector<Vec2> crosses,flags;
@@ -68,7 +69,7 @@ public:
     const std::vector<A350Vertex>& render_compass(const A350View& view);
     const std::vector<A350Vertex>& render_aircraft(const A350View& view);
     const std::vector<A350RunwayLabel>& runway_labels(int side) const;
-    const A350Switch& oans_switch(bool on) const;
+    const A350Switch& oans_switch(bool on,bool partial=false) const;
     const std::vector<A350Vertex>& cursor(Vec2 at,bool horizontal=false,bool yellow=false);
     const std::vector<A350Vertex>& plan_notice(int mode,bool outside);
     const std::vector<A350Vertex>& advisory(int mode,bool pfd,const std::vector<RunwayAheadHit>& hits,

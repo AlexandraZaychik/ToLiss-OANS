@@ -2,7 +2,8 @@ param(
     [string]$SdkRoot = 'E:\cxx_project\_lib\SDK',
     [string]$CompilerDirectory = 'D:\Qt\Qt6\Tools\mingw1310_64\bin',
     [ValidateSet('Release','Debug')][string]$BuildFlavor = 'Release',
-    [string]$AircraftPath = 'G:\SteamLibrary\steamapps\common\X-Plane 12\Aircraft\ToLissA320_V1p3p2'
+    [string]$AircraftPath = 'G:\SteamLibrary\steamapps\common\X-Plane 12\Aircraft\ToLissA320_V1p3p2',
+    [string]$MagknightAircraftPath = ''
 )
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
@@ -109,6 +110,27 @@ try {
     Invoke-IsolatedHost 'a359'
     Invoke-IsolatedHost 'a35k'
     Invoke-IsolatedHost 'a350-switch'
+    $magknightModels=@(
+        @{Id='B788';Icao='B788';Name='787-8';Mode='magknight'},
+        @{Id='B789';Icao='B789';Name='787-9';Mode='magknight-b789'},
+        @{Id='B78X';Icao='B789';Name='787-10';Mode='magknight-b78x'},
+        @{Id='B78X-corrected';Icao='B78X';Name='787-10';Mode='magknight-corrected-icao'}
+    )
+    foreach($model in $magknightModels) {
+        "P acf/_ICAO $($model.Icao)`nP acf/_author Magknight`nP acf/_name Magknight $($model.Name) Aviators XP12`nPANEL_2D_BEGIN" | Set-Content -LiteralPath (Join-Path $testRoot ($model.Id+'.acf')) -Encoding ascii
+    }
+    foreach($model in $magknightModels) {
+        Copy-Item -LiteralPath (Join-Path $projectRoot 'config.ini') -Destination $package -Force
+        & (Join-Path $testRoot 'plugin_host.exe') (Join-Path $testRoot 'XPLM_64.dll') (Join-Path $package '64\win.xpl') (Join-Path $testRoot 'sim') (Join-Path $testRoot ($model.Id+'.acf')) $model.Mode
+        if($LASTEXITCODE -ne 0){throw "$($model.Id) three-stage lifecycle failed"}
+    }
+    if($MagknightAircraftPath) {
+        foreach($id in @('B788','B789','B78X')) {
+            Copy-Item -LiteralPath (Join-Path $projectRoot 'config.ini') -Destination $package -Force
+            & (Join-Path $testRoot 'plugin_host.exe') (Join-Path $testRoot 'XPLM_64.dll') (Join-Path $package '64\win.xpl') (Join-Path $testRoot 'sim') (Join-Path $MagknightAircraftPath ($id+'.acf')) 'magknight-real'
+            if($LASTEXITCODE -ne 0){throw "$id real ACF isolated lifecycle failed"}
+        }
+    }
     $tile=Join-Path $fixture '+30+120/+30+120.dsf'
     Remove-Item -LiteralPath $tile
     Invoke-IsolatedHost 'reuse'

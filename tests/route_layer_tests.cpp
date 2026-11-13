@@ -14,6 +14,10 @@ int main(int argc,char** argv) {
         f<<"1 0 0 0 ZTST Layer test\n100 45 1 0 0.25 0 0 0 09 30.0 120.0 0 0 0 0 0 0 27 30.0 120.035 0 0 0 0 0 0\n99\n";f.close();
         IndexEntry entry;entry.file=fixture;entry.icao="ZTST";
         A350Map map(std::filesystem::u8path(argv[1]),entry);
+        const auto& off=map.oans_switch(false);const auto& half=map.oans_switch(true,true);const auto& full=map.oans_switch(true);
+        verify(off.bounds==half.bounds&&half.bounds==full.bounds,"three switch glyphs share hit bounds");
+        verify(half.vertices.size()>off.vertices.size()&&full.vertices.size()>off.vertices.size(),"half and full switches have visible state glyphs");
+        verify(half.vertices.size()!=full.vertices.size(),"half dot differs from full check mark");
         A350View view;view.lat=30;view.lon=120.01;view.center=local(view.lat,view.lon,30,120);
         verify(view.detail_quality==4,"detail quality defaults to medium");
         auto detail_view=view;detail_view.detail_quality=2;

@@ -80,6 +80,7 @@ int legacy(int argc,char** argv){try{
 #include "aircraft/lr/identity.hpp"
 #include "aircraft/zibo/identity.hpp"
 #include "aircraft/magknight/identity.hpp"
+#include "aircraft/magknight/display.hpp"
 #include <map>
 int main(int argc,char** argv){try{
  if(legacy(1,argv))return 1;
@@ -95,15 +96,53 @@ int main(int argc,char** argv){try{
  scenario("profile/path-traversal");verify(!profile::load(source,"../x",error),"ICAO cannot escape config directory");
  scenario("profile/id-precedence-fails-closed");
  const auto acf_path=root/"plane.acf";write(acf_path,acf());write(root/"objects/cockpit_INN.obj",obj(false));
- const auto mk=root/"mk788.acf";
- write(mk,"P acf/_ICAO B788\nP acf/_author Magknight, RZSim, Heroes and Cows\nP acf/_name Magknight 787-8 Aviators XP12\nPANEL_2D_BEGIN\n");
- verify(oans::magknight::matches_b788(mk),"Magknight 787-8 identity");
- write(mk,"P acf/_ICAO B789\nP acf/_author Magknight, RZSim, Heroes and Cows\nP acf/_name Magknight 787-10 Aviators XP12\n");
- verify(!oans::magknight::matches_b788(mk),"787-10 must not match the 787-8");
- write(mk,"P acf/_ICAO B788\nP acf/_author Other\nP acf/_name Other 787-8\n");
- verify(!oans::magknight::matches_b788(mk),"other vendor must not match Magknight");
+ const auto mk=root/"renamed-aircraft.acf";
+ auto mk_identity=[&](const std::string& icao,const std::string& name,const std::string& author="Magknight, RZSim, Heroes and Cows") {
+  write(mk,"P acf/_ICAO "+icao+"\nP acf/_author "+author+" \r\nP acf/_name "+name+" \r\nPANEL_2D_BEGIN\n");
+  return oans::magknight::identify(mk);
+ };
+ verify(mk_identity("B788","Magknight 787-8 Aviators XP12")=="B788","787-8 identity ignores renamed ACF filename");
+ verify(mk_identity("B789","Magknight 787-9 Aviators XP12")=="B789","787-9 identity");
+ verify(mk_identity("B789","Magknight 787-10 Aviators XP12")=="B78X","787-10 declaring B789 selects its own profile");
+ verify(mk_identity("B78X","Magknight 787-10 Aviators XP12")=="B78X","787-10 with corrected ICAO");
+ verify(mk_identity("B789","Magknight 787-8 Aviators XP12").empty(),"inconsistent identity fails closed");
+ verify(mk_identity("B788","Magknight 787-8 Aviators XP12","Other").empty(),"other vendor must not match Magknight");
+ verify(mk_identity("B789","Magknight 787-11 Aviators XP12").empty(),"uninspected variant is unsupported");
+ verify(oans::magknight::identify(root/"missing.acf").empty(),"missing ACF fails closed");
  verify(profile::load("config/magknight","B788",error),error);
- verify(std::abs(profile::current.nd_uv[0][0][2]-.17229266)<1e-8,"B788 captain ND geometry");
+ const auto mk788=profile::current;
+ for(const auto& id:{"B789","B78X"}) {
+  verify(profile::load("config/magknight",id,error),error);
+  const double dy=std::string(id)=="B78X"?-3.0480000179832:0;
+  const double dz=std::string(id)=="B789"?-3.0477046692216:0;
+  for(int side=0;side<2;++side)for(int corner=0;corner<4;++corner)for(int axis=0;axis<3;++axis)
+   verify(std::abs(profile::current.nd_corners[side][corner][axis]-mk788.nd_corners[side][corner][axis]-(axis==1?dy:axis==2?dz:0))<1e-7,"variant-specific CG-relative click coordinates");
+  for(int resolution=0;resolution<2;++resolution)for(int side=0;side<2;++side)for(int axis=0;axis<4;++axis)
+   verify(profile::current.nd_uv[resolution][side][axis]==mk788.nd_uv[resolution][side][axis],"shared inboard screen UV layout");
+  verify(std::abs(oans::magknight::display::aspect(profile::current.nd_corners[0],2)-oans::magknight::display::aspect(mk788.nd_corners[0],2))<1e-7,"CG translation preserves display proportions");
+ }
+ verify(profile::load("config/magknight","B788",error),error);
+ verify(std::abs(profile::current.nd_uv[0][0][2]-.34472299)<1e-8,"B788 captain full display geometry");
+ const auto* full=profile::current.nd_uv[0][0];
+ const auto half=oans::magknight::display::uv(full,1);
+ const auto whole=oans::magknight::display::uv(full,2);
+ verify(std::abs(half[0]-.17229374)<1e-7&&whole[0]<.00002&&half[2]==whole[2],"B788 half uses right ND pane, full includes left CDU");
+ verify(oans::magknight::display::uv(full,0)==half,"off switch stays in the ND pane");
+ const auto left=oans::magknight::display::uv(full,1,false);
+ verify(left[0]==whole[0]&&left[2]==half[0],"B788 half follows left ND pane after display switching");
+
+ const double half_aspect=oans::magknight::display::aspect(profile::current.nd_corners[0],1);
+ const double full_aspect=oans::magknight::display::aspect(profile::current.nd_corners[0],2);
+ verify(half_aspect>.66&&half_aspect<.67&&std::abs(full_aspect-2*half_aspect)<1e-5,"B788 physical half/full aspect comes from 3-D glass dimensions");
+ for(double aspect:{half_aspect,full_aspect}) {
+  const double x=381;
+  verify(std::abs(oans::magknight::display::map_x(300+(x-300)/aspect,aspect)-x)<1e-9,"B788 picking inverts physical aspect compensation");
+ }
+ const auto& corners=profile::current.nd_corners[0];
+ const auto half_left=oans::magknight::display::corner(corners,0,1);
+ verify(std::abs(half_left[0]+.225370575)<1e-7&&oans::magknight::display::corner(corners,1,1)==oans::magknight::display::corner(corners,1,2),"B788 click corners follow display extent");
+ verify(oans::magknight::display::corner(corners,1,1,false)==half_left,"B788 left pane click projection shares the same seam");
+ verify(oans::magknight::display::next_mode(0)==1&&oans::magknight::display::next_mode(1)==2&&oans::magknight::display::next_mode(2)==0,"B788 three-stage cycle wraps to off");
  write(root/"config/a339.json",good);std::string id;verify(oans::toliss::identify(acf_path,id,error),error);
  write(root/"config"/(id+".json"),"{}");Path loaded;
  verify(!oans::toliss::load_for_aircraft(root/"config",acf_path,"A339",loaded,error)&&loaded.empty(),"broken identity-specific profile cannot silently fall back to generic geometry");

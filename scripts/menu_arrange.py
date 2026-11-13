@@ -71,6 +71,14 @@ def read(path: Path) -> str:
     return path.read_bytes().decode("utf-8")
 
 
+def config_defaults(source: str) -> dict[str, str]:
+    """Read the plugin's built-in Config initializers, not the user's saved settings."""
+    match = re.search(r'struct Config\s*\{([^}]*)\}', source)
+    if not match:
+        raise ValueError("无法读取插件默认配置")
+    return dict(re.findall(r'\b(\w+)\s*=\s*(true|false|\d+|MenuLanguage::\w+)', match.group(1)))
+
+
 def save(path: Path, previous: str, ordered: list[Entry]) -> str:
     updated = reorder(previous, ordered)
     if read(path) != previous:
@@ -97,6 +105,11 @@ TEXT_EN = {
     '↓ 下移': '↓ Move down',
     '保存顺序': 'Save order',
     '类型': 'Type',
+    '默认值': 'Default',
+    '开启': 'On',
+    '关闭': 'Off',
+    '跟随模拟器': 'Follow simulator',
+    '无法读取插件默认配置': 'Cannot read plugin defaults',
     '子菜单': 'Submenu',
     '菜单项': 'Item',
     '保存后需重新编译插件生效 · Alt+↑ / Alt+↓ 移动 · Ctrl+S 保存': 'Rebuild the plugin after saving · Alt+↑ / Alt+↓ Move · Ctrl+S Save',
@@ -134,6 +147,7 @@ class MenuArrange:
         # Use the plugin's Chinese labels so the preview stays consistent.
         language_source = Path(__file__).resolve().parents[1] / "src/menu_language.hpp"
         self.chinese_labels = dict(re.findall(r'\{"(\w+)","([^"\n]*)"\}', read(language_source)))
+        self.defaults = config_defaults(read(language_source.with_name("plugin.cpp")))
         root.title("ToLiss OANS · 菜单排序")
         root.geometry("820x650")
         root.minsize(620, 480)
@@ -160,11 +174,13 @@ class MenuArrange:
         self.language_selector.bind("<<ComboboxSelected>>", self.switch_language)
         area = ttk.Frame(frame)
         area.pack(fill="both", expand=True)
-        self.tree = ttk.Treeview(area, columns=("kind",), selectmode="browse")
+        self.tree = ttk.Treeview(area, columns=("kind", "default"), selectmode="browse")
         self.tree.heading("#0", text="Plugins → ToLiss OANS")
         self.tree.heading("kind", text="类型")
-        self.tree.column("#0", width=550, minwidth=360)
+        self.tree.heading("default", text="默认值")
+        self.tree.column("#0", width=470, minwidth=280)
         self.tree.column("kind", width=90, minwidth=70, stretch=False)
+        self.tree.column("default", width=150, minwidth=110, stretch=False)
         scroll = ttk.Scrollbar(area, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=scroll.set)
         self.tree.pack(side="left", fill="both", expand=True)
@@ -197,6 +213,31 @@ class MenuArrange:
     def label(self, entry: Entry) -> str:
         return self.chinese_labels.get(entry.id, entry.label) if self.language.get() == "中文" else entry.label
 
+    def default_value(self, entry: Entry) -> str:
+        switches = {"status_bar": "status_bar", "scale_button": "scale_button",
+                    "traffic": "adsb_in", "close_when_takeoff": "close_when_takeoff"}
+        if entry.id in switches:
+            return self.tr("开启" if self.defaults[switches[entry.id]] == "true" else "关闭")
+        options = {
+            "detail_quality": ("detail_quality", ["detail_ultra", "detail_max", "detail_xhigh", "detail_high", "detail_medium", "detail_low"]),
+            "cursor": ("cursor_style", ["cursor_pink_vertical", "cursor_pink_horizontal", "cursor_yellow_vertical", "cursor_yellow_horizontal"]),
+            "stand_name": ("simple_stand_names", ["stand_complex", "stand_simple"]),
+            "mcdu2_auto": ("fms", ["mcdu2_full_close", "mcdu2_full_open"]),
+        }
+        if entry.id == "language":
+            return self.tr("跟随模拟器") if self.defaults["language"] == "MenuLanguage::automatic" else self.defaults["language"].split("::")[-1]
+        if entry.id in options:
+            key, choices = options[entry.id]
+            value = self.defaults[key]
+            index = int(value == "true") if value in ("true", "false") else int(value)
+            if entry.id == "mcdu2_auto" and self.defaults["with_light"] == "true":
+                return self.label(self.entries["mcdu2_with_light"])
+            return self.label(self.entries[choices[index]])
+        return "—"
+
+    def row_values(self, entry: Entry):
+        return (self.tr("子菜单" if entry.action == 0 else "菜单项"), self.default_value(entry))
+
     def set_status(self, text: str, **values):
         self.status.set(self.tr(text, **values))
 
@@ -213,9 +254,10 @@ class MenuArrange:
             variable.set(self.tr(text))
         self.tree.heading("#0", text=self.tr("插件 → ToLiss OANS"))
         self.tree.heading("kind", text=self.tr("类型"))
+        self.tree.heading("default", text=self.tr("默认值"))
         for entry in self.entries.values():
             self.tree.item(entry.id, text=self.label(entry),
-                           values=(self.tr("子菜单" if entry.action == 0 else "菜单项"),))
+                           values=self.row_values(entry))
         # Refresh translated status while retaining the pending sort and selection.
         self.clear_drop()
         self.drag_source = ""
@@ -261,7 +303,7 @@ class MenuArrange:
         self.entries = {entry.id: entry for entry in entries}
         for entry in entries:
             self.tree.insert("" if entry.parent == "root" else entry.parent, "end", iid=entry.id,
-                             text=self.label(entry), values=(self.tr("子菜单" if entry.action == 0 else "菜单项"),), open=True)
+                             text=self.label(entry), values=self.row_values(entry), open=True)
         self.set_status("已读取 {count} 项，当前顺序与源码一致", count=len(entries))
         self.controls()
 

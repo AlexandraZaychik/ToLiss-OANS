@@ -3,6 +3,7 @@
 /output/
 /backups/
 __pycache__/
+.idea/
 *.log
 
 # Downloaded installers and duplicate source archives

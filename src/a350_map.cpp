@@ -58,7 +58,7 @@ bool A350View::same_map_content(const A350View& o) const {
         for(size_t i=0;i<a.size();++i)if(a[i].x!=b[i].x||a[i].y!=b[i].y)return false;
         return true;
     };
-    if(anchor.x!=o.anchor.x||anchor.y!=o.anchor.y||scale!=o.scale||range!=o.range||mode!=o.mode||
+    if(width!=o.width||anchor.x!=o.anchor.x||anchor.y!=o.anchor.y||scale!=o.scale||range!=o.range||mode!=o.mode||
        radius!=o.radius||bottom!=o.bottom||outside_plan!=o.outside_plan||fms_airport!=o.fms_airport||fms_runway!=o.fms_runway||map_runway!=o.map_runway||!points(crosses,o.crosses)||!points(flags,o.flags))return false;
     return true;
 }
@@ -74,7 +74,7 @@ struct A350Map::Impl {
     std::array<Cache,4> cache;
     double last_base_motion_time=-1;
     std::int64_t last_base_motion_frame=-1;
-    std::array<A350Switch,2> switches;
+    std::array<A350Switch,3> switches;
     std::vector<A350Vertex> cursor_vertices,notice_vertices,advisory_vertices;
     const std::vector<A350Vertex> empty_vertices;
     bool notice_ready=false;
@@ -135,8 +135,8 @@ A350Map::A350Map(const std::filesystem::path& assets):p_(std::make_unique<Impl>(
     OANS_TRACE("Lua a350_load_font begin");
     lua_getglobal(L,"a350_load_font");p.string((assets/"a350").u8string());p.check(lua_pcall(L,1,0,0));
     lua_getglobal(L,"a350_load_wtc");p.string((assets/"wtc.json").u8string());p.check(lua_pcall(L,1,0,0));
-    for(int on=0;on<2;++on) {
-        lua_getglobal(L,"a350_oans_switch");lua_pushboolean(L,on);p.check(lua_pcall(L,1,5,0));
+    for(int on=0;on<3;++on) {
+        lua_getglobal(L,"a350_oans_switch");lua_pushboolean(L,on!=0);lua_pushboolean(L,on==2);p.check(lua_pcall(L,2,5,0));
         auto& button=p.switches[on];p.draw_buffer.copy(L,button.vertices);
         for(int i=0;i<4;++i)button.bounds[i]=lua_tonumber(L,2+i);
         lua_settop(L,0);
@@ -171,7 +171,7 @@ const std::vector<A350Vertex>& A350Map::plan_notice(int mode,bool outside) {
     p.string(mode==4?"plan":"other");lua_pushboolean(L,outside);p.check(lua_pcall(L,2,1,0));
     p.draw_buffer.copy(L,p.notice_vertices);lua_settop(L,0);p.notice_ready=true;return p.notice_vertices;
 }
-const A350Switch& A350Map::oans_switch(bool on) const{return p_->switches[on?1:0];}
+const A350Switch& A350Map::oans_switch(bool on,bool partial) const{return p_->switches[on?(partial?2:1):0];}
 A350Stats A350Map::stats() const{return p_->stats;}
 A350CacheStats A350Map::cache_stats(int side) const{return p_->cache.at(side).stats;}
 const std::vector<A350RunwayLabel>& A350Map::runway_labels(int side) const{return p_->cache.at(side).labels;}
@@ -240,7 +240,7 @@ const std::vector<A350Vertex>& A350Map::render_impl(int side,const A350View& vie
     p.string(view.fms_airport);p.string(view.fms_runway);p.alerts(view.runway_ahead);lua_pushboolean(L,view.alert_blink);
     lua_pushboolean(L,view.outside_plan);p.string(view.map_runway);p.traffic(view.traffic);
     lua_pushboolean(L,view.position_valid);lua_pushboolean(L,view.simple_stand_names);lua_pushinteger(L,layer);
-    lua_pushinteger(L,view.detail_quality);p.check(lua_pcall(L,27,3,0));
+    lua_pushinteger(L,view.detail_quality);lua_pushnumber(L,view.width);p.check(lua_pcall(L,28,3,0));
     OANS_TRACE("Lua a350_render complete; reading buffers");
     p.draw_buffer.copy(L,cache.vertices);
     cache.label_vertices.clear();

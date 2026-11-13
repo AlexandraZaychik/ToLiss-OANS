@@ -46,7 +46,8 @@ public:
         }
         const double dx=std::max({l-projection.anchor.x,0.,projection.anchor.x-r});
         const double dy=std::max({b-projection.anchor.y,0.,projection.anchor.y-t});
-        if(r<0||l>600||t<projection.bottom||b>552||
+        const double left=(600-projection.width)*.5,right=600-left;
+        if(r<left||l>right||t<projection.bottom||b>552||
            dx*dx+dy*dy>projection.radius*projection.radius) {polygon_.clear();return polygon_;}
         if(radius_!=projection.radius||anchor_.x!=projection.anchor.x||anchor_.y!=projection.anchor.y) {
             anchor_=projection.anchor;radius_=projection.radius;
@@ -57,8 +58,8 @@ public:
         }
         // Keep the original clipping order and inclusive boundaries.
         for(size_t i=0;i<circle_.size()&&!polygon_.empty();++i)cut(circle_[i],circle_[(i+1)%circle_.size()]);
-        cut({0,projection.bottom},{600,projection.bottom});cut({600,552},{0,552});
-        cut({0,552},{0,0});cut({600,0},{600,552});
+        cut({left,projection.bottom},{right,projection.bottom});cut({right,552},{left,552});
+        cut({left,552},{left,0});cut({right,0},{right,552});
         return polygon_;
     }
 };

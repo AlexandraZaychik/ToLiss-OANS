@@ -5,11 +5,11 @@
 #include <string>
 
 namespace oans::magknight {
-// The 787-10 in this package declares B789, so neither ICAO nor filename
-// alone is sufficient. Restrict this first adapter to the inspected 787-8.
-inline bool matches_b788(const std::filesystem::path& model) {
+// The inspected 787-10 declares B789. Use the authored model name as well as
+// vendor and ICAO; filenames and the simulator's ICAO cannot select its profile.
+inline std::string identify(const std::filesystem::path& model) {
     std::ifstream file(model);
-    if (!file) return false;
+    if (!file) return {};
     std::string line, author, name, icao;
     while (std::getline(file, line)) {
         if (line == "PANEL_2D_BEGIN" || line == "PANEL_3D_BEGIN") break;
@@ -23,8 +23,10 @@ inline bool matches_b788(const std::filesystem::path& model) {
         else if (key == "acf/_name") name = value;
         else if (key == "acf/_ICAO") icao = value;
     }
-    return !file.bad() && icao == "B788" &&
-        author.find("Magknight") != std::string::npos &&
-        name.find("Magknight 787-8 ") == 0;
+    if (file.bad() || author.find("Magknight") == std::string::npos) return {};
+    if (icao == "B788" && name.find("Magknight 787-8 ") == 0) return "B788";
+    if (icao == "B789" && name.find("Magknight 787-9 ") == 0) return "B789";
+    if ((icao == "B789" || icao == "B78X") && name.find("Magknight 787-10 ") == 0) return "B78X";
+    return {};
 }
 }

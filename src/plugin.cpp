@@ -26,6 +26,7 @@
 #include "nd_ui.hpp"
 #include "aircraft_profile.hpp"
 #include "aircraft/backend.hpp"
+#include "aircraft/magknight/display.hpp"
 #include "gl_state.hpp"
 #include "gl_coords.hpp"
 #include "gl_font.hpp"
@@ -55,7 +56,7 @@
 
 using namespace oans;
 namespace {
-constexpr const char* version="0.4.49";
+constexpr const char* version="0.4.50";
 constexpr float white[3]={1,1,1},cyan[3]={.20f,.90f,1},green[3]={0,1,0},amber[3]={1,.65f,0};
 constexpr float taxi_yellow[3]={.95f,.83f,0},magenta[3]={1,.35f,1};
 AtlasFont map_font;
@@ -199,7 +200,19 @@ double advisory_choose_at=0;
 constexpr double airport_query_interval=30; // Seconds between periodic airport selections.
 double fms_bind_at=0;
 unsigned fms_generation_seen=0;
-bool enabled=false,profile_ok=false,aircraft_ok=false,nd_on[2]={false,false},manual_airport=false;
+bool enabled=false,profile_ok=false,aircraft_ok=false,manual_airport=false;
+int nd_on[2]={0,0}; // 787: off / ND pane / full display; other aircraft: off / on
+bool three_stage_nd() {return aircraft_backend&&std::strcmp(aircraft_backend->id,"magknight")==0;}
+bool nd_half_right() {return aircraft_data.value("mk_nav",0,0)!=1&&aircraft_data.value("mk_nav",1,0)==1;}
+double nd_aspect(int id) {
+    return id<2&&three_stage_nd()?magknight::display::aspect(profile::current.nd_corners[id],nd_on[id]):1;
+}
+Vec2 map_pointer(int id,Vec2 p) {p.x=magknight::display::map_x(p.x,nd_aspect(id));return p;}
+std::array<double,4> nd_render_uv(int side) {
+    const auto uv=aircraft_backend->uv(aircraft_data,side,false);
+    return three_stage_nd()?magknight::display::uv(uv,nd_on[side],nd_half_right()):
+        std::array<double,4>{uv[0],uv[1],uv[2],uv[3]};
+}
 bool aircraft_probe_complete=false,aircraft_report_pending=false;
 bool airport_position_pending=true,first_oans_open=true;
 bool airborne_open_pending=false,airborne_open_locked=false;
@@ -254,7 +267,7 @@ void update_cursor_menu() {
 }
 
 bool draw_registered=false,loop_registered=false;
-double render_gain=1;
+double render_gain=1,render_aspect=1;
 std::vector<std::pair<XPLMCommandRef,int>> commands;
 std::shared_ptr<Airport> airport;
 std::vector<A350Traffic> traffic_targets;
@@ -344,12 +357,21 @@ std::deque<IndexEntry> building_queue;
 std::set<std::string> building_pending;
 std::unique_ptr<A350Map> a350_ui;
 Box oans_box;
+double oans_aircraft_y_shift(int id) {
+    return id<2&&three_stage_nd()?35-magknight::display::standard_y_offset:0;
+}
+Box oans_hit_box(int id) {
+    auto box=oans_box;box.l=box.r-(box.r-box.l)/nd_aspect(id);
+    const double shift=oans_aircraft_y_shift(id);box.b+=shift;box.t+=shift;
+    return box;
+}
 Box oans_base_box;
 int oans_vertical_offset=0;
 int oans_horizontal_offset=0;
 std::string oans_horizontal_query="0";
 std::string oans_offset_query="0";
 bool oans_slider_drag=false;
+constexpr int oans_slider_limit=50;
 void set_oans_vertical_offset(int pixels,bool update_field=true) {
     oans_vertical_offset=std::clamp(pixels,-600,600);
     oans_box=oans_base_box;
@@ -420,7 +442,7 @@ std::string form_encode(const std::string& input) {
 #ifdef _WIN32
 std::string post_overpass(const char* host,const std::string& body) {
     const std::wstring wide_host(host,host+std::strlen(host));
-    WinHttpHandle session{WinHttpOpen(L"ToLissOANS/0.4.49 airport-map",WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+    WinHttpHandle session{WinHttpOpen(L"ToLissOANS/0.4.50 airport-map",WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
                                       WINHTTP_NO_PROXY_NAME,WINHTTP_NO_PROXY_BYPASS,0)};
     if(!session.value)throw std::runtime_error(winhttp_error("WinHttpOpen"));
     if(!WinHttpSetTimeouts(session.value,10000,10000,20000,45000))
@@ -729,6 +751,7 @@ void bind_refs(bool aircraft_refs=true) {
     if(!aircraft_probe_complete||selected!=aircraft_backend)aircraft_report_pending=true;
     aircraft_probe_complete=true;
     if(selected!=aircraft_backend) {
+        nd_on[0]=nd_on[1]=0;
         if(aircraft_backend)for(const auto& n:aircraft_backend->bindings)refs.erase(n.first);
         fms_port.select(selected?selected->make_fms():nullptr);
         aircraft_backend=selected;profile_ok=aircraft_ok=false;profile::current={};
@@ -812,9 +835,11 @@ void diagnostics() {
         for(int side=0;side<2;++side)f<<"gauge_projected pass="<<i<<" side="<<side<<" rect="<<p.projected[side][0]<<','<<p.projected[side][1]<<','<<p.projected[side][2]<<','<<p.projected[side][3]<<'\n';
     }
     for(int side=0;side<2;++side) {
+        const auto box=oans_hit_box(side);
         f<<"ND_state side="<<side<<" enabled="<<nd_on[side]<<" blocked="<<nd_blocked(side)<<'\n';
-        f<<"OANS_switch side="<<side<<" visible="<<(nd_overlay_blocked(side)[0]=='\0')<<" checked="<<nd_on[side]
-         <<" bounds="<<oans_box.l<<','<<oans_box.b<<','<<oans_box.r<<','<<oans_box.t
+        f<<"OANS_switch side="<<side<<" visible="<<(nd_overlay_blocked(side)[0]=='\0')<<" checked="<<bool(nd_on[side])
+         <<" display_mode="<<nd_on[side]
+         <<" bounds="<<box.l<<','<<box.b<<','<<box.r<<','<<box.t<<" physical_aspect="<<nd_aspect(side)
          <<" vertical_offset_px="<<oans_vertical_offset<<" horizontal_offset_px="<<oans_horizontal_offset<<'\n';
     }
     for(int i=0;i<3;++i)f<<"view="<<i<<" panel="<<static_cast<int>(views[i].panel)<<" range_nm="<<views[i].range_nm
@@ -957,7 +982,7 @@ void confirm_first_oans_position() {
 }
 void toggle_nd(int side) {
     const bool opening=!nd_on[side]&&!nd_on[1-side];
-    nd_on[side]=!nd_on[side];
+    nd_on[side]=three_stage_nd()?magknight::display::next_mode(nd_on[side]):!nd_on[side];
     if(!nd_on[side])oans_arc[side]=false;
     if(nd_on[side]) {
         confirm_first_oans_position();
@@ -1172,11 +1197,14 @@ void restore_graphics(const int* s,int texture) {
 void color(const float* c) {glColor3d(c[0]*render_gain,c[1]*render_gain,c[2]*render_gain);}
 void line(Vec2 a,Vec2 b,const float* c,float width=1) {graphics();color(c);glLineWidth(width);glBegin(GL_LINES);glVertex2d(a.x,a.y);glVertex2d(b.x,b.y);glEnd();}
 void rect(double l,double b,double r,double t,const float* c) {graphics();color(c);glBegin(GL_QUADS);glVertex2d(l,b);glVertex2d(r,b);glVertex2d(r,t);glVertex2d(l,t);glEnd();}
+double map_text_width(const std::string& value,double size) {return map_font.width(value,size)/render_aspect;}
 void text(double x,double y,const std::string& s,const float* c=white,double max_width=-1,double size=18,bool ellipsis=true) {
     float rgb[3]={static_cast<float>(c[0]*render_gain),static_cast<float>(c[1]*render_gain),static_cast<float>(c[2]*render_gain)};
     if(map_text&&map_font.ready()&&map_font.upload(XPLMGenerateTextureNumbers,XPLMBindTexture2d)) {
         XPLMSetGraphicsState(0,1,0,0,1,0,0);XPLMBindTexture2d(map_font.texture(),0);
-        map_font.draw(x,y,s,rgb,max_width<0?std::max(0.0,594-x):max_width,size,ellipsis);graphics();return;
+        glPushMatrix();glTranslated(x,0,0);glScaled(1/render_aspect,1,1);
+        map_font.draw(0,y,s,rgb,(max_width<0?std::max(0.0,594-x):max_width)*render_aspect,size,ellipsis);
+        glPopMatrix();graphics();return;
     }
     XPLMDrawString(rgb,static_cast<int>(x),static_cast<int>(y),s.c_str(),nullptr,xplmFont_Basic);
 }
@@ -1196,6 +1224,9 @@ MapTransform transform(int id) {
     bool heading=view.orientation<0?(mode==2||mode==3):view.orientation==1;
     const auto viewport=map_viewport(mode,view.panel!=Panel::closed,panel_height(view.panel));
     m.anchor=viewport.anchor;m.radius=viewport.radius;m.bottom=viewport.bottom;
+    const double aspect=nd_aspect(id);m.width=600*aspect;
+    m.radius*=std::min(1.0,aspect);
+    if(mode==3)m.anchor.y=500-m.radius;
     m.bottom+=status_bar_height();
     m.scale=m.radius/(view.range_nm*1852);m.angle=heading?value("psi")*pi/180:0;return m;
 }
@@ -1206,7 +1237,7 @@ void draw_controls(int id) {
     const float status_bg[]={.40f,.40f,.48f},yellow[]={1,1,0},black[]={0,0,0};
     auto selector_text=[&](const UiControl& c,double x,double y,double width,double cap,const float* normal) {
         if(c.enabled&&c.highlight) {
-            rect(x-2,y-2,x+std::min(width,map_font.width(c.label,cap))+2,y+cap+2,cyan);
+            rect(x-2,y-2,x+std::min(width,map_text_width(c.label,cap))+2,y+cap+2,cyan);
             text(x,y,c.label,black,width,cap);
         } else text(x,y,c.label,c.enabled?(c.pending?yellow:normal):dim,width,cap);
     };
@@ -1257,7 +1288,7 @@ void draw_controls(int id) {
             if(dropdown) {
                 rect(split,b.b+2,b.r-2,b.t-2,status_bg);
                 rect(split,b.b+2,split+1,b.t-2,border);
-                const double cap=12,width=map_font.width(c.label,cap);
+                const double cap=12,width=map_text_width(c.label,cap);
                 selector_text(c,b.l+std::max(4.0,(split-b.l-width)/2),(b.b+b.t)/2-cap/2,split-b.l-8,cap,green);
             }
             const double x=(split+b.r)/2,y=(b.b+b.t)/2;
@@ -1293,13 +1324,13 @@ void draw_controls(int id) {
         if(newline!=std::string::npos) {
             const std::string rows[]={c.label.substr(0,newline),c.label.substr(newline+1)};
             for(int row=0;row<2;++row) {
-                const double width=map_font.width(rows[row],12);
+                const double width=map_text_width(rows[row],12);
                 text(b.l+std::max(4.0,(b.r-b.l-width)/2),(b.b+b.t)/2+1-row*14,rows[row],c.enabled?white:dim,b.r-b.l-8,12);
             }
             continue;
         }
         double cap=frame.status_style?(c.action==UiAction::close?14:12):c.label.size()>20?14:16;
-        double width=map_font.width(c.label,cap),x=b.l+std::max(5.0,(b.r-b.l-width)*.5);
+        double width=map_text_width(c.label,cap),x=b.l+std::max(5.0,(b.r-b.l-width)*.5);
         const bool selector=c.action==UiAction::focus||c.action==UiAction::airport_list||c.action==UiAction::initial_list||c.action==UiAction::initial_select||c.action==UiAction::result;
         selector_text(c,x,(b.b+b.t)/2-cap*.5,b.r-x-5,cap,selector&&views[id].panel==Panel::airport?green:c.selected?cyan:white);
         if(c.selected&&!frame.status_style)rect(b.l+1,b.t-2,b.r-1,b.t-1,cyan);
@@ -1316,7 +1347,7 @@ void draw_compass(int id) {
     curve(radius,false);curve(radius*.5,true);
     auto caption=[&](Vec2 p,const std::string& s,double rotation,double cap){
         glMatrixMode(GL_MODELVIEW);glPushMatrix();glTranslated(p.x,p.y,0);glRotated(rotation,0,0,1);
-        text(-map_font.width(s,cap)*.5,-cap*.5,s,white,70,cap);glPopMatrix();};
+        text(-map_text_width(s,cap)*.5,-cap*.5,s,white,70,cap);glPopMatrix();};
     if(plan) {
         const char* cardinal[]={"N","E","S","W"};for(int k=0;k<4;++k)caption(point(k*90,radius-18),cardinal[k],0,20);
     } else {
@@ -1379,6 +1410,7 @@ void draw_map(int id,bool nd) {
     const float bg[]={0,0,0},pave[]={.243f,.243f,.243f};
     rect(0,0,600,600,bg);
     auto m=transform(id);const auto& view=views[id];
+    const int mode=id<2?nd_mode(id):4;
     if(config.test&&nd) {
         rect(5,5,595,595,pave);rect(10,10,590,590,bg);
         for(int i=0;i<=5;++i) {double p=20+i*112;line({p,20},{p,580},cyan);line({20,p},{580,p},cyan);}
@@ -1386,12 +1418,16 @@ void draw_map(int id,bool nd) {
         text(40,535,"TOLISS OANS ND / CLICK TEST",green);text(40,505,"CLICK 4 CORNERS AND CENTER",cyan);
         text(40,475,"MAP TOGGLE IN PLUGINS MENU");
     } else if(airport) {
+        struct AspectMatrix {
+            AspectMatrix(double aspect) {glPushMatrix();glTranslated(300,0,0);glScaled(1/aspect,1,1);glTranslated(-300,0,0);}
+            ~AspectMatrix(){glPopMatrix();}
+        } aspect_matrix(nd_aspect(id));
         if(!a350_map)throw std::runtime_error("A350 map engine is not loaded");
         if(!map_font.upload(XPLMGenerateTextureNumbers,XPLMBindTexture2d))
             throw std::runtime_error("A350 font atlas upload failed");
         A350View input;
         input.center=m.center;input.anchor=m.anchor;input.scale=m.scale;input.angle=m.angle;
-        input.radius=m.radius;input.bottom=m.bottom;
+        input.radius=m.radius;input.bottom=m.bottom;input.width=m.width;
         input.lat=value("lat");input.lon=value("lon");input.psi=value("psi");input.mag=value("magpsi");
         input.simple_stand_names=config.simple_stand_names;
         input.detail_quality=config.detail_quality;
@@ -1418,7 +1454,7 @@ void draw_map(int id,bool nd) {
             map_textures[id].invalidate();map_label_textures[id].invalidate();texture_maps[id]=a350_map;
         }
         XPLMSetGraphicsState(0,1,0,0,1,0,0);XPLMBindTexture2d(map_font.texture(),0);
-        if(map_textures[id].update(vertices,map_font.texture(),a350_map->cache_stats(id).builds,XPLMGenerateTextureNumbers))
+        if(nd_aspect(id)==1&&map_textures[id].update(vertices,map_font.texture(),a350_map->cache_stats(id).builds,XPLMGenerateTextureNumbers))
             map_textures[id].draw(render_gain,XPLMBindTexture2d,a350_map->base_view(id),input);
         else MapTexture::draw_fallback(vertices,render_gain,a350_map->base_view(id),input);
         // Alert fill sits over surfaces but below the independently cached labels.
@@ -1426,7 +1462,7 @@ void draw_map(int id,bool nd) {
         XPLMSetGraphicsState(0,1,0,0,1,0,0);XPLMBindTexture2d(map_font.texture(),0);
         if(!fill.empty())draw_a350_vertices(fill,render_gain);
         const auto& labels=a350_map->base_labels(id);
-        if(map_label_textures[id].update(labels,map_font.texture(),a350_map->cache_stats(id).builds,XPLMGenerateTextureNumbers,true))
+        if(nd_aspect(id)==1&&map_label_textures[id].update(labels,map_font.texture(),a350_map->cache_stats(id).builds,XPLMGenerateTextureNumbers,true))
             map_label_textures[id].draw(render_gain,XPLMBindTexture2d,a350_map->base_view(id),input);
         else {
             XPLMBindTexture2d(map_font.texture(),0);
@@ -1446,21 +1482,20 @@ void draw_map(int id,bool nd) {
     } else {
         const bool loading=airport_map_loading;
         const std::string message=loading?"PLEASE WAIT":"ARPT NAV NOT AVAIL";
-        text(300-map_font.width(message,22)*.5,300,message,loading?white:amber,-1,22);
+        text(300-map_text_width(message,22)*.5,300,message,loading?white:amber,-1,22);
     }
     // Flight information and compact airport header follow the A350 hierarchy.
     rect(0,552,600,600,bg);
     const std::string airport_label=airport?((airport->icao_explicit?"":"IDENT ")+airport->icao+
         (airport->iata.empty()?"":"  "+airport->iata)):"----";
-    std::ostringstream range;range<<view.range_nm;
     text(8,578,"GS",white,40,16);text(47,576,std::to_string(static_cast<int>(value("speed")/kt+.5)),green,65,22);
-    text(110,578,"TAS",white,48,16);text(165,578,value("tas")/kt>=60?std::to_string(static_cast<int>(value("tas")/kt+.5)):"---",green,70,16);
-    const int mode=id<2?nd_mode(id):4;
+    text(110,578,"TAS",white,60,16);text(165,578,value("tas")/kt>=60?std::to_string(static_cast<int>(value("tas")/kt+.5)):"---",green,70,16);
     const bool heading=view.orientation<0?(mode==2||mode==3):view.orientation==1;
     std::string title=airport?airport->name:"NO AIRPORT";for(char& c:title)c=static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-    double title_width=std::min(290.0,map_font.width(title,16));text(592-title_width,579,title,white,290,16);
-    text(592-map_font.width(airport_label,18),554,airport_label,white,220,18);
+    double title_width=std::min(290.0,map_text_width(title,16));text(592-title_width,579,title,white,290,16);
+    text(592-map_text_width(airport_label,18),554,airport_label,white,220,18);
     text(8,554,heading?"HDG UP":"NORTH UP",white,170,15);
+    std::ostringstream range;range<<view.range_nm;
     text(8,44+status_bar_height(),range.str()+" NM",cyan,110,16);
     if(advisory_test.active)text(125,44+status_bar_height(),"TEST",magenta,80,16);
     // Clear the strip before controls so its relocated arrow stays visible.
@@ -1474,7 +1509,7 @@ void draw_map(int id,bool nd) {
     if(status_bar_height()>0) {
         const float yellow[]={1,1,0};
         if(!airport_map_loading&&aircraft_position_ready(id<2?id:-1)&&!current_surface.empty()) {
-            const double width=map_font.width(current_surface,16);
+            const double width=map_text_width(current_surface,16);
             rect(300-width*.5-5,stus_bar_safe_bottom,300+width*.5+5,status_bar_height()-1,yellow);
             rect(300-width*.5-3,stus_bar_safe_bottom+2,300+width*.5+3,status_bar_height()-3,bg);
             text(300-width*.5,13,current_surface,yellow,width,16,false);
@@ -1526,10 +1561,15 @@ void probe_nd(int id) {
         <<" rgb_after="<<int(after[0])<<','<<int(after[1])<<','<<int(after[2])
         <<" rgb_flipped="<<int(flipped[0])<<','<<int(flipped[1])<<','<<int(flipped[2])<<" gl_error="<<error;log(s.str());
 }
+void clear_nd_rect(double l,double b,double width,double height) {
+    const float black[3]={0,0,0};
+    rect(l,b,l+width,b+height,black);
+}
 void render_rect(double l,double b,double width,double height,int id,bool nd) {
     OANS_TRACE_SCOPE();
     GLint matrix_mode;glGetIntegerv(GL_MATRIX_MODE,&matrix_mode);glMatrixMode(GL_MODELVIEW);glPushMatrix();
     glTranslated(l,b,0);glScaled(width/600,height/600,1);
+    render_aspect=nd?nd_aspect(id):1;
     glPushAttrib(GL_SCISSOR_BIT|GL_LINE_BIT|GL_CURRENT_BIT);scissor_map();
     // Calibration geometry is bounded by the ND itself; omit our computed
     // scissor during this diagnostic to distinguish clipping from late redraw.
@@ -1540,17 +1580,19 @@ void render_rect(double l,double b,double width,double height,int id,bool nd) {
         if(!map_font.upload(XPLMGenerateTextureNumbers,XPLMBindTexture2d))
             throw std::runtime_error("A350 checkbox font atlas upload failed");
         XPLMSetGraphicsState(0,1,0,0,1,0,0);XPLMBindTexture2d(map_font.texture(),0);
-        glPushMatrix();glTranslated(oans_horizontal_offset,-oans_vertical_offset,0);
-        draw_a350_vertices(a350_ui->oans_switch(nd_on[id]).vertices,render_gain);
+        glPushMatrix();glTranslated(oans_horizontal_offset,-oans_vertical_offset+oans_aircraft_y_shift(id),0);
+        glTranslated(oans_base_box.r,0,0);glScaled(1/render_aspect,1,1);glTranslated(-oans_base_box.r,0,0);
+        draw_a350_vertices(a350_ui->oans_switch(nd_on[id]!=0,three_stage_nd()&&nd_on[id]==1).vertices,render_gain);
         glPopMatrix();graphics();
     }
     if(!nd||advisory_display_available(id,false))draw_advisory(id);
     if(a350_ui&&(!nd||nd_on[id]))if(auto at=pointer_on_map(id)) {
         const auto& vertices=a350_ui->cursor(*at,config.cursor_style%2!=0,config.cursor_style>=2);
         XPLMSetGraphicsState(0,1,0,0,1,0,0);XPLMBindTexture2d(map_font.texture(),0);
-        draw_a350_vertices(vertices,render_gain);graphics();
+        glPushMatrix();glTranslated(at->x,0,0);glScaled(1/render_aspect,1,1);glTranslated(-at->x,0,0);
+        draw_a350_vertices(vertices,render_gain);glPopMatrix();graphics();
     }
-    map_text=false;if(nd&&nd_on[id]&&config.test)probe_nd(id);glPopAttrib();
+    map_text=false;render_aspect=1;if(nd&&nd_on[id]&&config.test)probe_nd(id);glPopAttrib();
     OANS_TRACE("render_rect OpenGL submission done side="+std::to_string(id));
     glMatrixMode(GL_MODELVIEW);glPopMatrix();glMatrixMode(matrix_mode);
 }
@@ -1678,13 +1720,13 @@ int gauge_draw(XPLMDrawingPhase,int,void*) {
         OANS_TRACE("OpenGL capture/setup done");
         for(int side=0;side<2;++side)if(nd_task[side]) {
             OANS_TRACE("ND geometry side="+std::to_string(side));
-            const auto& uv=aircraft_backend->uv(aircraft_data,side,false);
+            const auto uv=nd_render_uv(side);
             if(sample) {
                 GLdouble z;
                 gluProject(l+uv[0]*w,b+uv[1]*h,0,model,projection,viewport,&trace.projected[side][0],&trace.projected[side][1],&z);
                 gluProject(l+uv[2]*w,b+uv[3]*h,0,model,projection,viewport,&trace.projected[side][2],&trace.projected[side][3],&z);
             }
-            if(rt==1) {if(nd_on[side]) {const float black[3]={0,0,0};rect(l+uv[0]*w,b+uv[1]*h,l+uv[2]*w,b+uv[3]*h,black);}}
+            if(rt==1) {if(nd_on[side])clear_nd_rect(l+uv[0]*w,b+uv[1]*h,(uv[2]-uv[0])*w,(uv[3]-uv[1])*h);}
             else {
                 render_gain=std::clamp(aircraft_backend->brightness(aircraft_data,side,false),0.0,1.0);
                 render_rect(l+uv[0]*w,b+uv[1]*h,(uv[2]-uv[0])*w,(uv[3]-uv[1])*h,side,true);render_gain=1;
@@ -1698,13 +1740,13 @@ int gauge_draw(XPLMDrawingPhase,int,void*) {
                 render_advisory_rect(l+uv[0]*w,b+uv[1]*h,(uv[2]-uv[0])*w,(uv[3]-uv[1])*h,side,pfd);render_gain=1;
             }
         }
-    } catch(const std::exception& e) {map_text=false;render_gain=1;config.nd=false;status="ND DRAW ERROR";log(e.what());display_log(std::string("ND_DRAW ERROR: ND rendering disabled for this session; ")+e.what());}
+    } catch(const std::exception& e) {map_text=false;render_aspect=1;render_gain=1;config.nd=false;status="ND DRAW ERROR";log(e.what());display_log(std::string("ND_DRAW ERROR: ND rendering disabled for this session; ")+e.what());}
     return 1;
 }
 std::pair<UiAction,int> map_label(int id,Vec2 p) {
     if(!airport)return {UiAction::none,-1};
     // Map gestures are handled by OANS controls.
-    auto m=transform(id);double best=35;int runway=-1;
+    auto m=transform(id);p=map_pointer(id,p);double best=35;int runway=-1;
     for(size_t i=0;i<airport->runways.size();++i) {double d=length(m.to(airport->runways[i].start)-p);if(d<best) {best=d;runway=static_cast<int>(i);}}
     return runway>=0?std::make_pair(UiAction::runway_next,runway):std::make_pair(UiAction::none,-1);
 }
@@ -1747,7 +1789,10 @@ void update_click_projection() {
     for(int side=0;side<2;++side)if(nd_overlay_available(side)) {
         std::array<Vec2,4> q;bool valid=true;
         for(int k=0;k<4;++k) {
-            const auto& v=profile::current.nd_corners[side][k];double e[4]={},c[4]={};
+            const auto& full=profile::current.nd_corners[side];
+            const auto v=three_stage_nd()?magknight::display::corner(full,k,nd_on[side],nd_half_right()):
+                std::array<double,3>{full[k][0],full[k][1],full[k][2]};
+            double e[4]={},c[4]={};
             for(int row=0;row<4;++row) {e[row]=a[12+row];for(int j=0;j<3;++j)e[row]+=a[j*4+row]*v[j];}
             for(int row=0;row<4;++row)for(int j=0;j<4;++j)c[row]+=p[j*4+row]*e[j];
             if(c[3]<.001) {valid=false;break;}
@@ -1769,15 +1814,17 @@ void pointer(int id,Vec2 p,Vec2 pixels,XPLMMouseStatus action,bool allow_actions
     OANS_TRACE_SCOPE();
     auto& s=views[id];auto& g=gestures[id];
     if(id<2) {
-        if(allow_actions&&action==xplm_MouseDown&&oans_box.contains(p)) {
+        if(allow_actions&&action==xplm_MouseDown&&oans_hit_box(id).contains(p)) {
             g.begin(p,pixels,false);captured_view=id;return;
         }
-        if(allow_actions&&g.pressed&&oans_box.contains(g.down)) {
+        if(allow_actions&&g.pressed&&oans_hit_box(id).contains(g.down)) {
             g.move(pixels);
             if(action==xplm_MouseUp) {
-                const bool toggle=!g.moved&&oans_box.contains(p);
+                const bool toggle=!g.moved&&oans_hit_box(id).contains(p);
                 release_input();
-                if(toggle) {toggle_nd(id);s.menu=false;status=nd_on[id]?"OANS MAP ON":"OANS MAP OFF";}
+                if(toggle) {toggle_nd(id);s.menu=false;
+                    status=!nd_on[id]?"OANS MAP OFF":three_stage_nd()?
+                        (nd_on[id]==1?"OANS ND HALF DISPLAY":"OANS ND FULL DISPLAY"):"OANS MAP ON";}
             }
             return;
         }
@@ -1788,12 +1835,12 @@ void pointer(int id,Vec2 p,Vec2 pixels,XPLMMouseStatus action,bool allow_actions
         const auto* hit=frame.hit(p);
         if(p.y<status_bar_height()&&(!allow_actions||!hit||hit->action!=UiAction::panel_toggle&&hit->action!=UiAction::zoom_in&&hit->action!=UiAction::zoom_out))return;
         const bool map_area=p.y>=transform(id).bottom&&p.y<550&&(!s.menu||!allow_actions)&&!frame.hit(p)
-            &&!(id<2&&oans_box.contains(p))&&(!allow_actions||map_label(id,p).first==UiAction::none);
+            &&!(id<2&&oans_hit_box(id).contains(p))&&(!allow_actions||map_label(id,p).first==UiAction::none);
         g.begin(p,pixels,map_area);captured_view=id;return;
     }
     if(!g.pressed)return;
     if(g.move(pixels)) {
-        auto m=transform(id);s.center=m.center+(m.from(g.last)-m.from(p));s.follow=false;g.last=p;
+        auto m=transform(id);s.center=m.center+(m.from(map_pointer(id,g.last))-m.from(map_pointer(id,p)));s.follow=false;g.last=p;
     }
     if(action!=xplm_MouseUp)return;
     const bool moved=g.moved;const Vec2 down=g.down;g.clear();captured_view=-1;
@@ -1811,7 +1858,7 @@ void pointer(int id,Vec2 p,Vec2 pixels,XPLMMouseStatus action,bool allow_actions
     if(label.first==UiAction::runway_next) {
         select_runway(label.second);s.feature_kind=0;s.feature_selection=label.second;
     }
-    else {if(input_owner>=0)release_input();show_context(s,p,transform(id).from(p));}
+    else {if(input_owner>=0)release_input();show_context(s,p,transform(id).from(map_pointer(id,p)));}
 }
 int overlay_click(XPLMWindowID,int x,int y,XPLMMouseStatus action,void*) {
     OANS_TRACE_SCOPE();OANS_TRACE("Mouse x="+std::to_string(x)+" y="+std::to_string(y)+" action="+std::to_string(action));
@@ -1822,8 +1869,8 @@ int overlay_click(XPLMWindowID,int x,int y,XPLMMouseStatus action,void*) {
         return 1;
     }
     for(int side=0;side<2;++side) {Vec2 p;if(!nd_point(side,x,y,p))continue;
-        if(!nd_on[side]&&!oans_box.contains(p))continue;
-        if(config.test&&!oans_box.contains(p)) {
+        if(!nd_on[side]&&!oans_hit_box(side).contains(p))continue;
+        if(config.test&&!oans_hit_box(side).contains(p)) {
             if(action==xplm_MouseDown) {++hit_count[side];std::ostringstream s;s<<"ND "<<side<<" click normalized="<<p.x/600<<','<<1-p.y/600;status=s.str();log(status);}
         } else {
             if(action==xplm_MouseDown)++hit_count[side];
@@ -1864,7 +1911,7 @@ XPLMCursorStatus cursor_noop(XPLMWindowID,int,int,void*) {return xplm_CursorDefa
 int overlay_wheel(XPLMWindowID,int x,int y,int wheel,int clicks,void*) {
     OANS_TRACE_SCOPE();
     if(wheel!=0)return 0;
-    for(int id=0;id<2;++id) {Vec2 p;if(!nd_available(id)||!nd_point(id,x,y,p)||oans_box.contains(p))continue;
+    for(int id=0;id<2;++id) {Vec2 p;if(!nd_available(id)||!nd_point(id,x,y,p)||oans_hit_box(id).contains(p))continue;
         if(p.y<status_bar_height())return 1;
         p.y-=status_bar_height();
         if(!config.test&&!scroll_nd_dropdown(views[id],ui_model(),p,clicks)&&!config.scale_button)
@@ -2024,11 +2071,11 @@ void test_draw(XPLMWindowID w,void*) {
     text(l+20,b+404,"OANS button vertical offset (ND pixels)",cyan);
     text(l+20,b+362,"Y: -up / +down");
     rect(l+180,b+365,l+432,b+369,white);
-    const double knob=l+180+(std::clamp(oans_vertical_offset,-20,20)+20)*252.0/40;
+    const double knob=l+180+(std::clamp(oans_vertical_offset,-oans_slider_limit,oans_slider_limit)+oans_slider_limit)*252.0/(2*oans_slider_limit);
     rect(knob-4,b+357,knob+4,b+377,cyan);
     button(test_offset_box,oans_offset_query+(advisory_test.focused&&advisory_test.field==2?" |":""),advisory_test.focused&&advisory_test.field==2);
     button(test_offset_reset,"Reset 0");
-    text(l+20,b+334,"Y input: +/-600. Slider: +/-20 fine adjustment.");
+    text(l+20,b+334,"Y input: +/-600. Slider: +/-50 fine adjustment.");
     text(l+20,b+314,"Both NDs. Session only. Reset clears X and Y.");
     text(l+20,b+286,"RWY AHEAD TEST",cyan);
     text(l+20,b+244,"Airport");text(l+20,b+192,"Runway(s)");
@@ -2105,7 +2152,7 @@ int test_click(XPLMWindowID w,int x,int y,XPLMMouseStatus action,void*) {
         focus_test_field(2);oans_slider_drag=true;
     }
     if(oans_slider_drag) {
-        set_oans_vertical_offset(static_cast<int>(std::lround((std::clamp(p.x,180.0,432.0)-180)*40/252-20)));
+        set_oans_vertical_offset(static_cast<int>(std::lround((std::clamp(p.x,180.0,432.0)-180)*(2*oans_slider_limit)/252-oans_slider_limit)));
         if(action==xplm_MouseUp)oans_slider_drag=false;
         return 1;
     }
@@ -2148,7 +2195,7 @@ int test_wheel(XPLMWindowID w,int x,int y,int,int clicks,void*) {
 const Box route_field{20,144,620,184},route_apply{20,88,170,124},route_clear{190,88,340,124},route_close{470,88,620,124};
 double route_text_width(size_t first,size_t last) {
     const auto s=route_query.substr(first,last-first);
-    return map_text&&map_font.ready()&&map_font.texture()?map_font.width(s,16):
+    return map_text&&map_font.ready()&&map_font.texture()?map_text_width(s,16):
         XPLMMeasureString(xplmFont_Basic,s.data(),static_cast<int>(s.size()));
 }
 void route_scroll_to_caret() {

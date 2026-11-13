@@ -3647,7 +3647,7 @@ function a350_load(file, offset, icao, fontdir, buildingsfile)
 end
 
 -- The original checkbox also works before an airport is available.
-function a350_oans_switch(on)
+function a350_oans_switch(on, partial)
     GLB.n, GLB.cap = 0, 180000
     native_draw_reset()
     GLB.wu, GLB.wv = TF.wu, TF.wv
@@ -3663,7 +3663,9 @@ function a350_oans_switch(on)
     local bs = 7
     local bx, by = box[1]+2, (box[2]+box[4])/2-bs/2+0.5
     DL.rect(bx, by, bx+bs, by+bs, MC.sel, 0, 0, 0.9)
-    if on then
+    if on and partial then
+        DL.circle(bx+bs/2, by+bs/2, 1.5, MC.green, 16, 2.0)
+    elseif on then
         DL.line(bx+1.4, by+3.8, bx+3.0, by+5.6, MC.green, 1.4)
         DL.line(bx+3.0, by+5.6, bx+5.9, by+1.4, MC.green, 1.4)
     end
@@ -3805,7 +3807,7 @@ local function traffic_label(C, target, x, y)
         {x+10,y+10},{x-10-width,y+10}}
     for _, p in ipairs(candidates) do
         local box = {p[1]-1,p[2]-1,p[1]+width+1,p[2]+height+1}
-        local clear = box[1]>=2 and box[3]<=298 and box[2]>=26 and box[4]<=C.map_bottom-2
+        local clear = box[1]>=C.x0+2 and box[3]<=C.x0+C.cw-2 and box[2]>=26 and box[4]<=C.map_bottom-2
         if clear and C.Rr>0 then
             for _, corner in ipairs({{box[1],box[2]},{box[3],box[2]},{box[1],box[4]},{box[3],box[4]}}) do
                 if (corner[1]-C.ax)^2+(corner[2]-C.ay)^2>(C.Rr-2)^2 then clear=false end
@@ -3825,7 +3827,7 @@ local function traffic_label(C, target, x, y)
     end
 end
 
-function a350_render(cx, cy, scale, angle, ax, ay, lat, lon, psi, mag, mode, rng, crosses, flags, radius, bottom, fms_airport, fms_runway, alerts, blink, outside_plan, map_runway, traffic, position_valid, simple_stand_names, layer, detail_quality)
+function a350_render(cx, cy, scale, angle, ax, ay, lat, lon, psi, mag, mode, rng, crosses, flags, radius, bottom, fms_airport, fms_runway, alerts, blink, outside_plan, map_runway, traffic, position_valid, simple_stand_names, layer, detail_quality, width)
     GLB.n, GLB.cap = 0, detail_quality == 0 and math.huge or (detail_quality == 1 and 270000 or 180000)
     native_draw_reset()
     GLB.wu, GLB.wv = TF.wu, TF.wv
@@ -3839,17 +3841,19 @@ function a350_render(cx, cy, scale, angle, ax, ay, lat, lon, psi, mag, mode, rng
     S.map_runway=map_runway~='' and map_runway or nil
     local G = S.apt.geo
     S.marks[S.apt.icao] = {crosses=crosses, flags=flags}
-    local C = {G=G, x0=0, y0=0, cw=300, ch=300, nd={side=0}, placed={}, hit={},
+    local x0, x1 = (600-(width or 600))/4, (600+(width or 600))/4
+    local C = {G=G, x0=x0, y0=0, cw=x1-x0, ch=300, nd={side=0}, placed={}, hit={},
                wcx=cx, wcy=cy, sc=scale/2, hv=angle/D2R, hc=math.cos(angle), hs=math.sin(angle),
                ax=ax/2, ay=(600-ay)/2, mode=mode, rng=rng, Rr=radius/2,
                map_bottom=(600-bottom)/2,pair_segments={},label_info={},
                detail_quality=detail_quality}
     MAPX.setup(C)
+    DL.clip = {x0*2,x1*2,0,600}
     if layer == 1 then
         -- Match map_texture_margin=64 host pixels. Keep label placement in the
         -- actual ND viewport, but retain surfaces/text beyond its edges for
         -- per-frame texture reprojection during turns.
-        DL.clip = {-64,664,-64,664}
+        DL.clip = {x0*2-64,x1*2+64,-64,664}
         DL.pad = 32 -- local units; geometry clips separately from atlas text.
     end
     local surface_vertices = 0
@@ -3876,7 +3880,7 @@ function a350_render(cx, cy, scale, angle, ax, ay, lat, lon, psi, mag, mode, rng
     end -- runway alert overlay
     if layer == 0 or layer == 1 then
     -- Reserve the host header and lower controls before original label placement.
-    C.placed = {{0,0,300,25}, {0,(600-bottom)/2,300,300},
+    C.placed = {{x0,0,x1,25}, {x0,(600-bottom)/2,x1,300},
                 {OANS_R[1]-2,OANS_R[2]-2,300,OANS_R[4]+2}}
     if mode == 'plan' and outside_plan then C.placed[#C.placed+1] = {4,34,110,61} end
     if #(alerts or {}) > 0 then
@@ -3894,14 +3898,14 @@ function a350_render(cx, cy, scale, angle, ax, ay, lat, lon, psi, mag, mode, rng
     local ownship_scale = 0.8
     for _, target in ipairs(traffic or {}) do
             local tx, ty = C.XY(G.W(target[1],target[2]))
-            if tx > -20 and tx < 320 and ty > -20 and ty < 320 then
+            if tx > x0-20 and tx < x1+20 and ty > -20 and ty < 320 then
                 draw_plane(tx,ty,(target[3]-C.hv)*D2R,MC.white,ownship_scale*0.8)
             end
     end
     if traffic_labels_enabled and math.abs(rng-0.2)<0.0001 then
         -- Dynamic-only rendering starts with an empty placed list. Reserve the
         -- same host controls, all traffic symbols and the valid ownship first.
-        C.placed = {{0,0,300,25},{0,C.map_bottom,300,300},
+        C.placed = {{x0,0,x1,25},{x0,C.map_bottom,x1,300},
             {OANS_R[1]-2,OANS_R[2]-2,300,OANS_R[4]+2}}
         if position_valid then
             local px,py=C.XY(G.W(lat,lon))
@@ -3913,12 +3917,12 @@ function a350_render(cx, cy, scale, angle, ax, ay, lat, lon, psi, mag, mode, rng
         end
         for _, target in ipairs(traffic or {}) do
             local x,y=C.XY(G.W(target[1],target[2]))
-            if x>0 and x<300 and y>25 and y<C.map_bottom then traffic_label(C,target,x,y) end
+            if x>x0 and x<x1 and y>25 and y<C.map_bottom then traffic_label(C,target,x,y) end
         end
     end
     if position_valid then
         local px, py = C.XY(G.W(lat,lon))
-        if px > -20 and px < 320 and py > -20 and py < 320 then
+        if px > x0-20 and px < x1+20 and py > -20 and py < 320 then
             draw_plane(px,py,(psi-C.hv)*D2R,MC.acft,ownship_scale)
         end
     end

@@ -14,7 +14,7 @@ inline MapViewport map_viewport(int mode,bool panel,double height=202) {
     return mode==3?MapViewport{{300,160},340,bottom}:MapViewport{{300,285},245,bottom};
 }
 struct MapProjection {
-    Vec2 center,anchor{300,285};double scale=1,angle=0,radius=245,bottom=40;
+    Vec2 center,anchor{300,285};double scale=1,angle=0,radius=245,bottom=40,width=600;
     Vec2 to(Vec2 p) const {p=p-center;double c=std::cos(angle),s=std::sin(angle);return {anchor.x+scale*(p.x*c-p.y*s),anchor.y+scale*(p.x*s+p.y*c)};}
     Vec2 from(Vec2 p) const {p={(p.x-anchor.x)/scale,(p.y-anchor.y)/scale};double c=std::cos(angle),s=std::sin(angle);return center+Vec2{p.x*c+p.y*s,-p.x*s+p.y*c};}
 };
