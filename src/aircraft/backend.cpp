@@ -7,7 +7,8 @@
 namespace oans::aircraft {
 const Backend* detect() {
     // Explicit ACF studio identity takes precedence over generic registry names.
-    const Backend* backends[]={&magknight::backend(),&zibo::backend(),&lr::backend(),&toliss::backend()};
+    const Backend* backends[]={&magknight::backend(),&zibo::backend(),&lr::calibra_backend(),
+                               &lr::backend(),&toliss::backend()};
     for(const auto* backend:backends)if(backend->matches())return backend;
     return nullptr;
 }

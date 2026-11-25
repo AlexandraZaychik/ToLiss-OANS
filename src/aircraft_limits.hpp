@@ -18,7 +18,8 @@ inline constexpr RunwayLimits runway_limits[] = {
     {"A20N", 1200, 30},
     {"A321", 1200, 30},
     {"A21N", 1200, 30},
-    {"A333", 1600, 45}, // LR A330 uses the ToLiss A339 runway limits.
+    {"A332", 1600, 45}, // Calibra A330-200 uses the same minimums as the A330-300.
+    {"A333", 1600, 45},
     {"A339", 1600, 45},
     {"A346", 1700, 45},
 };

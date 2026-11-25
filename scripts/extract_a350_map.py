@@ -51,6 +51,44 @@ def main():
         elseif code == "1301" then''')
     ])
     take(704, 2321, 'geometry, triangulation, markings, stands, building geometry', [
+        ('local function decimate(xs, ys, mind)',
+         '''local function ring_vertex_key(x, y)
+    return math.floor(x * 50 + 0.5) * 1000003 + math.floor(y * 50 + 0.5)
+end
+
+local function repeated_ring_vertices(xs, ys)
+    local first, keep = {}, {}
+    -- sample_nodes adds the closing copy itself. Only count visits in the ring.
+    for i = 1, #xs - 1 do
+        local key = ring_vertex_key(xs[i], ys[i])
+        local previous = first[key]
+        if previous then
+            keep[previous], keep[i] = true, true
+        else
+            first[key] = i
+        end
+    end
+    return keep
+end
+
+local function decimate(xs, ys, mind, keep)'''),
+        ('if (xs[k] - lx) ^ 2 + (ys[k] - ly) ^ 2 >= m2 or k == n then',
+         'if k == n or (keep and keep[k]) or (xs[k] - lx) ^ 2 + (ys[k] - ly) ^ 2 >= m2 then'),
+        ('local key = math.floor(xs[k] * 50 + 0.5) * 1000003 + math.floor(ys[k] * 50 + 0.5)',
+         'local key = ring_vertex_key(xs[k], ys[k])'),
+        ('''            local cx, cy = decimate(xs, ys, 25)
+            if #cx >= 3 then add_chunks(G.pave_c, cx, cy) end
+            local hx, hy = decimate(xs, ys, 8)
+            if #hx >= 3 then add_chunks(G.pave_m, hx, hy) end
+            local fx, fy = fix_ring(decimate(xs, ys, 3))''',
+         '''            -- split_ring needs each visit to a shared vertex to close its loops.
+            local keep = repeated_ring_vertices(xs, ys)
+            local cx, cy = decimate(xs, ys, 25, keep)
+            if #cx >= 3 then add_chunks(G.pave_c, cx, cy) end
+            local hx, hy = decimate(xs, ys, 8, keep)
+            if #hx >= 3 then add_chunks(G.pave_m, hx, hy) end
+            local fine_x, fine_y = decimate(xs, ys, 3, keep)
+            local fx, fy = fix_ring(fine_x, fine_y)'''),
         ('if nm ~= "" and not nm:lower():find("ramp start") then', 'if nm ~= "" then'),
         ('text = table.concat(names, "_"), n = #names',
          'text = table.concat(names, "_"), names = names, n = #names'),

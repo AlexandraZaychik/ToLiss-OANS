@@ -7,6 +7,36 @@ local function upvalue(fn, wanted)
     end
     error('missing renderer upvalue: ' .. wanted)
 end
+
+-- The outline visits (0, 60) twice to close a retraced spur. A distance-only
+-- pass drops the second visit, leaving a diagonal that fills outside the square.
+local ring = {}
+local meters_to_degrees = 180 / (math.pi * 6371000)
+for _, point in ipairs({{0,0}, {60,0}, {60,60}, {0,60}, {-40,60}, {-5,60}, {0,60}}) do
+    ring[#ring + 1] = {lat=point[2] * meters_to_degrees, lon=point[1] * meters_to_degrees}
+end
+local square = {icao='TEST', rwys={}, ends={}, polys={{rings={ring}}}, lines={}, nets={}, stands={}}
+upvalue(a350_load, 'build_geo')(square)
+local function covered(chunks, x, y)
+    local function side(ax, ay, bx, by)
+        return (bx - ax) * (y - ay) - (by - ay) * (x - ax)
+    end
+    for _, chunk in ipairs(chunks) do
+        for i = 1, #chunk.t, 6 do
+            local ax, ay, bx, by, cx, cy = table.unpack(chunk.t, i, i + 5)
+            local a, b, c = side(ax, ay, bx, by), side(bx, by, cx, cy), side(cx, cy, ax, ay)
+            if (a >= 0 and b >= 0 and c >= 0) or (a <= 0 and b <= 0 and c <= 0) then return true end
+        end
+    end
+    return false
+end
+for _, level in ipairs({'fill_m', 'fill_c', 'fill'}) do
+    local fill = square.geo.polys[1][level]
+    assert(covered(fill, 29, 32), level .. ' must fill inside the pavement')
+    assert(not covered(fill, -2, 35), level .. ' must preserve the junction and stay inside the pavement')
+end
+print('PASS pavement junction preserved by all three geometry levels')
+
 local map = upvalue(a350_render, 'MAPX')
 local dl = upvalue(a350_render, 'DL')
 local triangles, lines, width = 0, 0, nil

@@ -1,4 +1,4 @@
-"""Extract the inspected LR A333 panel geometry without modifying aircraft assets."""
+"""Extract panel geometry from the Laminar A330-300 or Calibra A330-200."""
 from __future__ import annotations
 import argparse
 from collections import defaultdict
@@ -39,9 +39,10 @@ def panel_quads(obj):
             require(depth >= 0, 'Unbalanced OBJ animation')
         elif tag in ('ATTR_cockpit', 'ATTR_cockpit_lit_only'):
             panel = True
-        elif tag in ('ATTR_cockpit_region', 'ATTR_cockpit_device'):
-            raise ValueError('Panel region/device layout needs a separate extraction rule')
-        elif tag == 'ATTR_no_cockpit':
+        elif tag == 'ATTR_cockpit_region':
+            raise ValueError('Panel region layout needs a separate extraction rule')
+        elif tag in ('ATTR_no_cockpit', 'ATTR_cockpit_device'):
+            # Device textures, including the Calibra EFBs, are outside the panel atlas.
             panel = False
         elif tag == 'TRIS' and panel and depth == 0:
             first, count = map(int, t[1:])
@@ -88,7 +89,13 @@ def extract(model):
             if len(parts) == 3:
                 props[parts[1]] = parts[2].strip()
     require(props.get('acf/_studio') == 'Laminar Research', 'ACF studio must be Laminar Research')
-    require(props.get('acf/_ICAO') == 'A333', 'This extractor supports the inspected LR A333 layout only')
+    icao = props.get('acf/_ICAO')
+    if icao == 'A333':
+        family = 'lr'
+    elif icao == 'A332' and 'Calibra Simulations' in props.get('acf/_author', ''):
+        family = 'calibra'
+    else:
+        raise ValueError('Expected a Laminar A330-300 or Calibra A330-200 ACF')
     attachments = [key[:-len('/_v10_att_file_stl')] for key, value in props.items()
                    if key.startswith('_obja/') and key.endswith('/_v10_att_file_stl')
                    and Path(value).stem.lower() == 'a330_cockpit']
@@ -106,7 +113,7 @@ def extract(model):
     header = panel.read_bytes()[:24]
     require(header[:8] == b'\x89PNG\r\n\x1a\n', 'Invalid panel PNG')
     width, height = struct.unpack('>II', header[16:24])
-    require((width, height) == (2048, 1024), 'Unexpected LR A333 panel dimensions')
+    require((width, height) == (2048, 1024), 'Unexpected A330 panel dimensions')
     quads = panel_quads(obj)
     obj_text = obj.read_text(encoding='utf-8')
     screens = {}
@@ -143,7 +150,7 @@ def extract(model):
         profile[f'{kind}_uv'] = [[s['uv'] for s in selected] for _ in range(2)]
     profile['nd_corners'] = [screens[f'nd_{side}']['cg_corners'] for side in ('capt', 'fo')]
     hashes = {label: hashlib.sha256(path.read_bytes()).hexdigest() for label, path in (('acf', model), ('obj', obj))}
-    report = {'family': 'lr', 'studio': props['acf/_studio'], 'icao': props['acf/_ICAO'],
+    report = {'family': family, 'studio': props['acf/_studio'], 'icao': icao,
               'model': str(model), 'object': str(obj), 'sha256': hashes, 'attachment': attachment,
               'panel_size': [width, height], 'object_to_cg': offset, 'screens': screens,
               'runtime_display_verified': False,
@@ -154,14 +161,17 @@ def extract(model):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--model', type=Path, required=True)
-    parser.add_argument('--output', type=Path, default=PROJECT / 'config/lr/a333.json')
-    parser.add_argument('--report', type=Path, default=PROJECT / 'reports/LR_A333_PROFILE_20261030.json')
+    parser.add_argument('--output', type=Path)
+    parser.add_argument('--report', type=Path)
     args = parser.parse_args()
     profile, report = extract(args.model.resolve())
-    for path, data in ((args.output, profile), (args.report, report)):
+    output = args.output or PROJECT / 'config' / report['family'] / (report['icao'].lower() + '.json')
+    report_name = 'LR_A333_PROFILE_20261030.json' if report['family'] == 'lr' else 'CALIBRA_A332_PROFILE.json'
+    report_path = args.report or PROJECT / 'reports' / report_name
+    for path, data in ((output, profile), (report_path, report)):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(data, ensure_ascii=False, indent=2, allow_nan=False) + '\n', encoding='utf-8')
-    print(json.dumps({'profile': str(args.output), 'report': str(args.report),
+    print(json.dumps({'profile': str(output), 'report': str(report_path),
                       'family': report['family'], 'nd_brightness': profile['nd_brightness'],
                       'pfd_brightness': profile['pfd_brightness'], 'nd_uv': profile['nd_uv'][0]}, indent=2))
 

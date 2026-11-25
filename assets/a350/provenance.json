@@ -23,6 +23,22 @@
       "last": 2321,
       "host_edits": [
         {
+          "before": "local function decimate(xs, ys, mind)",
+          "after": "local function ring_vertex_key(x, y)\n    return math.floor(x * 50 + 0.5) * 1000003 + math.floor(y * 50 + 0.5)\nend\n\nlocal function repeated_ring_vertices(xs, ys)\n    local first, keep = {}, {}\n    -- sample_nodes adds the closing copy itself. Only count visits in the ring.\n    for i = 1, #xs - 1 do\n        local key = ring_vertex_key(xs[i], ys[i])\n        local previous = first[key]\n        if previous then\n            keep[previous], keep[i] = true, true\n        else\n            first[key] = i\n        end\n    end\n    return keep\nend\n\nlocal function decimate(xs, ys, mind, keep)"
+        },
+        {
+          "before": "if (xs[k] - lx) ^ 2 + (ys[k] - ly) ^ 2 >= m2 or k == n then",
+          "after": "if k == n or (keep and keep[k]) or (xs[k] - lx) ^ 2 + (ys[k] - ly) ^ 2 >= m2 then"
+        },
+        {
+          "before": "local key = math.floor(xs[k] * 50 + 0.5) * 1000003 + math.floor(ys[k] * 50 + 0.5)",
+          "after": "local key = ring_vertex_key(xs[k], ys[k])"
+        },
+        {
+          "before": "            local cx, cy = decimate(xs, ys, 25)\n            if #cx >= 3 then add_chunks(G.pave_c, cx, cy) end\n            local hx, hy = decimate(xs, ys, 8)\n            if #hx >= 3 then add_chunks(G.pave_m, hx, hy) end\n            local fx, fy = fix_ring(decimate(xs, ys, 3))",
+          "after": "            -- split_ring needs each visit to a shared vertex to close its loops.\n            local keep = repeated_ring_vertices(xs, ys)\n            local cx, cy = decimate(xs, ys, 25, keep)\n            if #cx >= 3 then add_chunks(G.pave_c, cx, cy) end\n            local hx, hy = decimate(xs, ys, 8, keep)\n            if #hx >= 3 then add_chunks(G.pave_m, hx, hy) end\n            local fine_x, fine_y = decimate(xs, ys, 3, keep)\n            local fx, fy = fix_ring(fine_x, fine_y)"
+        },
+        {
           "before": "if nm ~= \"\" and not nm:lower():find(\"ramp start\") then",
           "after": "if nm ~= \"\" then"
         },

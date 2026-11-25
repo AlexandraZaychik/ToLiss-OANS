@@ -266,13 +266,32 @@ local function sample_nodes(P, closed)
     return xs, ys, si
 end
 
-local function decimate(xs, ys, mind)
+local function ring_vertex_key(x, y)
+    return math.floor(x * 50 + 0.5) * 1000003 + math.floor(y * 50 + 0.5)
+end
+
+local function repeated_ring_vertices(xs, ys)
+    local first, keep = {}, {}
+    -- sample_nodes adds the closing copy itself. Only count visits in the ring.
+    for i = 1, #xs - 1 do
+        local key = ring_vertex_key(xs[i], ys[i])
+        local previous = first[key]
+        if previous then
+            keep[previous], keep[i] = true, true
+        else
+            first[key] = i
+        end
+    end
+    return keep
+end
+
+local function decimate(xs, ys, mind, keep)
     local m2 = mind * mind
     local gx, gy = { xs[1] }, { ys[1] }
     local n = #xs
     for k = 2, n do
         local lx, ly = gx[#gx], gy[#gy]
-        if (xs[k] - lx) ^ 2 + (ys[k] - ly) ^ 2 >= m2 or k == n then
+        if k == n or (keep and keep[k]) or (xs[k] - lx) ^ 2 + (ys[k] - ly) ^ 2 >= m2 then
             gx[#gx + 1], gy[#gy + 1] = xs[k], ys[k]
         end
     end
@@ -358,7 +377,7 @@ local function split_ring(xs, ys)
     local rings = {}
     local px, py, keys, pos = {}, {}, {}, {}
     for k = 1, #xs do
-        local key = math.floor(xs[k] * 50 + 0.5) * 1000003 + math.floor(ys[k] * 50 + 0.5)
+        local key = ring_vertex_key(xs[k], ys[k])
         local i = pos[key]
         if i then
             local lx, ly = {}, {}
@@ -671,11 +690,14 @@ function build_geo(apt)
         for ri, ring in ipairs(pg.rings) do
             local xs, ys = sample_nodes(to_pts(ring), true)
             add_chunks(G.pave, xs, ys)
-            local cx, cy = decimate(xs, ys, 25)
+            -- split_ring needs each visit to a shared vertex to close its loops.
+            local keep = repeated_ring_vertices(xs, ys)
+            local cx, cy = decimate(xs, ys, 25, keep)
             if #cx >= 3 then add_chunks(G.pave_c, cx, cy) end
-            local hx, hy = decimate(xs, ys, 8)
+            local hx, hy = decimate(xs, ys, 8, keep)
             if #hx >= 3 then add_chunks(G.pave_m, hx, hy) end
-            local fx, fy = fix_ring(decimate(xs, ys, 3))
+            local fine_x, fine_y = decimate(xs, ys, 3, keep)
+            local fx, fy = fix_ring(fine_x, fine_y)
             gp.rings_m[ri] = { fx, fy }
             local mx2, my2 = fix_ring(hx, hy)
             local kx2, ky2 = fix_ring(cx, cy)

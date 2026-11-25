@@ -3,11 +3,15 @@
 #include "fms.hpp"
 #include <algorithm>
 #include <cmath>
+#include <string_view>
 
 namespace oans {
-inline bool plan_enroute_phase(const std::string& family,double phase) {
+inline bool uses_airbus_flight_phases(std::string_view family) {
+    return family=="toliss"||family=="lr"||family=="calibra";
+}
+inline bool plan_enroute_phase(std::string_view family,double phase) {
     // Shared policy: ECAM 6 includes climb, cruise and descent.
-    return (family=="toliss"||family=="lr")&&phase==6;
+    return uses_airbus_flight_phases(family)&&phase==6;
 }
 // Airport-to-airport distance, not route length or remaining FMS distance.
 // Great-circle distance also handles the date line and long-haul flights.

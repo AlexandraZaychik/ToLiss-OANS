@@ -342,6 +342,47 @@ int main(int argc,char** argv){
   set("sim/cockpit2/switches/beacon_on",0,1);wait(160);
   verify(count_text(light_log(),"light detect beacon try 1 success")==lr_beacon_before+1,"LR backend also executes light-triggered capture");
 
+  const auto calibra_model=std::filesystem::u8path(argv[3])/"A330-200.acf";
+  {std::ofstream f(calibra_model);f<<"I\n1200 Version\n\nP acf/_ICAO A332\n"
+      <<"P acf/_author Laminar authors; A330-200: Calibra Simulations\nP acf/_studio Laminar Research\n"
+      <<"P acf/_cgZ 89.284\nP _gear/0/_gear_z 21.860000610\n";}
+  configure(argv[2],argv[3],calibra_model.u8string().c_str());icao("A332");message(0,106,nullptr);message(0,102,nullptr);wait(60);
+  const auto calibra_report=report();
+  verify(calibra_report.find("AIRCRAFT_BACKEND id=calibra manufacturer=\"Calibra Simulations\"")!=std::string::npos&&
+         calibra_report.find("profile_match=1 aircraft_match=1")!=std::string::npos&&
+         calibra_report.find("FMS source=LR_MCDU2")!=std::string::npos&&observers("sim/FMS")>0,
+         "Calibra has its own identity and profile, with the LR MCDU2 source bound");
+  const auto calibra_log=read(package/"diagnostics.log");
+  verify(calibra_log.find("a332.json")!=std::string::npos&&calibra_log.find(
+         "family=calibra ICAO=A332 nose_m=27.220835 tail_m=31.599165 half_span_m=30.150000 fallback_a320=0")!=std::string::npos,
+         "Calibra loads its own display profile and calibrated A332 envelope");
+  for(int side=0;side<2;++side) {
+   const auto unit=std::to_string(side+1);
+   const std::string suffix=side?"fo":"capt";
+   set(("laminar/A333/nd"+unit+"/display_state").c_str(),0,3);
+   set(("laminar/A333/knobs/EFIS_mode_pos_"+suffix).c_str(),0,3);
+   set(("laminar/A333/ND/draw_map_mode_"+suffix).c_str(),0,2);
+   for(const char* signal:{"att","hdg","lrn"})set(("laminar/A333/adiru"+unit+"/"+signal+"_status").c_str(),0,1);
+  }
+  set("sim/cockpit2/EFIS/map_range_nm",0,20);
+  set("sim/cockpit2/EFIS/map_range_nm_copilot",0,20);
+  set("sim/cockpit2/EFIS/map_range",0,1);
+  set("sim/cockpit2/EFIS/map_range_copilot",0,1);
+  set("laminar/A333/data/flight_phase",0,7);wait(5);
+  set("laminar/A333/data/flight_phase",0,8);wait(5);
+  const auto landing_report=report();
+  verify(landing_report.find("ND_state side=0 enabled=1 blocked=\n")!=std::string::npos&&
+         landing_report.find("ND_state side=1 enabled=1 blocked=\n")!=std::string::npos&&
+         get("sim/cockpit2/EFIS/map_range",0)==0&&get("sim/cockpit2/EFIS/map_range_copilot",0)==0&&
+         get("sim/cockpit2/EFIS/map_range_nm",0)==10&&get("sim/cockpit2/EFIS/map_range_nm_copilot",0)==10,
+         "Calibra touchdown opens both OANS sides at physical 10 NM via its inherited FWS phase");
+  configure(argv[2],argv[3],lr_model.u8string().c_str());icao("A333");message(0,106,nullptr);message(0,102,nullptr);wait(60);
+  const auto restored_lr=report();
+  verify(restored_lr.find("AIRCRAFT_BACKEND id=lr manufacturer=\"Laminar Research\"")!=std::string::npos&&
+         restored_lr.find("profile_match=1 aircraft_match=1")!=std::string::npos&&
+         restored_lr.find("ND_state side=0 enabled=0")!=std::string::npos,
+         "Switching back reloads the stock A333 profile and resets Calibra overlay state");
+
   scenario("native/zibo-deferred-direct-source");
   const auto zibo_model=std::filesystem::u8path(argv[3])/"pruned-zibo.acf";
   {std::ofstream f(zibo_model);f<<"P acf/_studio Laminar Research modified by Zibo and Twkster\nP acf/_ICAO B738\nP acf/_cgZ 59.5\nP _gear/0/_gear_z 13.59\n";}

@@ -57,7 +57,7 @@
 
 using namespace oans;
 namespace {
-constexpr const char* version="0.4.53";
+constexpr const char* version="0.4.54";
 constexpr float white[3]={1,1,1},cyan[3]={.20f,.90f,1},green[3]={0,1,0},amber[3]={1,.65f,0};
 constexpr float taxi_yellow[3]={.95f,.83f,0},magenta[3]={1,.35f,1};
 AtlasFont map_font;
@@ -170,7 +170,7 @@ const aircraft::Bindings simulator_names={
 };
 const char* cursor_settings[]={"pink_vertical","pink_horizontal","yellow_vertical","yellow_horizontal"};
 const char* detail_quality_settings[]={"ultra","max","xhigh","high","medium","low"};
-struct Config {bool nd=true,test=false,fms=false,simple_stand_names=true,status_bar=false,scale_button=false,adsb_in=false,close_when_takeoff=false,with_light=false;MenuLanguage language=MenuLanguage::automatic;int cursor_style=0,detail_quality=4;};
+struct Config {bool nd=true,test=false,fms=false,simple_stand_names=true,status_bar=true,scale_button=false,adsb_in=false,close_when_takeoff=false,with_light=false;MenuLanguage language=MenuLanguage::automatic;int cursor_style=0,detail_quality=4;};
 std::string current_surface;
 double surface_sample_at=0;
 SurfaceTracker surface_tracker;
@@ -179,8 +179,7 @@ double status_bar_height() {return config.status_bar&&!config.test?stus_bar_heig
 FmsPort fms_port;
 const aircraft::Backend* aircraft_backend=nullptr;
 bool plan_airport_supported() {
-    return aircraft_backend&&(std::strcmp(aircraft_backend->id,"toliss")==0||
-        std::strcmp(aircraft_backend->id,"lr")==0);
+    return aircraft_backend&&uses_airbus_flight_phases(aircraft_backend->id);
 }
 const aircraft::DataAccess aircraft_data{value,[](const std::string& key,int i){return dr(key).numeric(i);}};
 bool oans_arc[2]={false,false};
@@ -451,7 +450,7 @@ std::string form_encode(const std::string& input) {
 #ifdef _WIN32
 std::string post_overpass(const char* host,const std::string& body) {
     const std::wstring wide_host(host,host+std::strlen(host));
-    WinHttpHandle session{WinHttpOpen(L"ToLissOANS/0.4.53 airport-map",WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+    WinHttpHandle session{WinHttpOpen(L"ToLissOANS/0.4.54 airport-map",WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
                                       WINHTTP_NO_PROXY_NAME,WINHTTP_NO_PROXY_BYPASS,0)};
     if(!session.value)throw std::runtime_error(winhttp_error("WinHttpOpen"));
     if(!WinHttpSetTimeouts(session.value,10000,10000,20000,45000))
@@ -1041,12 +1040,11 @@ void update_magknight_range() {
     if(change.reset_selector)XPLMSetDatai(selector.id,1);
 }
 void update_ecam_oans() {
-    const bool toliss=aircraft_backend&&std::strcmp(aircraft_backend->id,"toliss")==0;
-    const bool lr=aircraft_backend&&std::strcmp(aircraft_backend->id,"lr")==0;
-    if(!aircraft_ok||(!toliss&&!lr)) {
+    if(!aircraft_ok||!plan_airport_supported()) {
         oans_ecam_phase=0;landing_airport_pending=false;landing_airport_locked=false;return;
     }
-    const auto ref=XPLMFindDataRef(lr?"laminar/A333/data/flight_phase":"AirbusFBW/ECAMFlightPhase");
+    const bool toliss=std::strcmp(aircraft_backend->id,"toliss")==0;
+    const auto ref=XPLMFindDataRef(toliss?"AirbusFBW/ECAMFlightPhase":"laminar/A333/data/flight_phase");
     const int type=ref?XPLMGetDataRefTypes(ref):0;
     const double raw_phase=type&xplmType_Double?XPLMGetDatad(ref):
         type&xplmType_Float?XPLMGetDataf(ref):type&xplmType_Int?XPLMGetDatai(ref):0;
@@ -1082,15 +1080,15 @@ void update_ecam_oans() {
     log("ECAM 7->8: actual landing runway="+landing_runway);
     for(int side=0;side<2;++side)if(!nd_on[side]) {
         // Both Airbus overlays require physical 10 NM; OANS uses its own scale.
-        const auto range=dr("range"+std::to_string(side));
+        const auto& selector=dr((toliss?"range":"range_selector")+std::to_string(side));
         auto set_int=[](const Ref& r,int v) {
             if(!r.id||!r.writable)return;
             if(r.type&xplmType_Int)XPLMSetDatai(r.id,v);
             else if(r.type&xplmType_Float)XPLMSetDataf(r.id,static_cast<float>(v));
             else if(r.type&xplmType_Double)XPLMSetDatad(r.id,v);
         };
-        // ToLiss range uses a selector index; LR's binding is the NM value.
-        set_int(range,lr?10:0);
+        // Position 0 is 10 NM on these Airbus selectors. LR's NM readouts are read-only.
+        set_int(selector,0);
         toggle_nd(side);
         oans_arc[side]=true;
         views[side].range_nm=landing_range;views[side].follow=true;views[side].orientation=-1;
@@ -3056,7 +3054,7 @@ PLUGIN_API int XPluginStart(char* name,char* signature,char* description) {
     }catch(...) {XPLMDebugString("[ToLissOANS] Cannot initialize detail.log\n");}
     OANS_TRACE_SCOPE();OANS_TRACE(std::string("XPluginStart build=")+detail::flavor);
     std::strcpy(name,detail::debug?"ToLiss OANS (debug)":"ToLiss OANS");std::strcpy(signature,"org.toliss-oans.experimental");
-    std::strcpy(description,"Airport navigation display for ToLiss aircraft and Laminar Research A330.");
+    std::strcpy(description,"Airport navigation display for supported X-Plane aircraft.");
     try {
         if(blocked_a350()) {
             XPLMDebugString("[ToLissOANS] A350 detected (A359/A35K); plugin startup blocked\n");

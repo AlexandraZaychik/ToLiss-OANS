@@ -2,7 +2,7 @@
 
 oans for:\
 ~ ToLiss all series\
-~ Laminar Research A330\
+~ Laminar Research A330 (also Calibra)\
 ~ Zibo B737\
 ~ MK B787
 some code from A350，with some small fix and small improve\

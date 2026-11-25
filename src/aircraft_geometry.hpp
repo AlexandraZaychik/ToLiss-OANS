@@ -23,6 +23,8 @@ inline constexpr Dimensions a346{75.27, 63.45, 6.57};
 // LR A330-300: supplied Air China A330/A340 FCOM, ALL 330-343,
 // DSC-20-20-00000766.0005001 / 21 MAR 16 (metres).
 inline constexpr Dimensions a333{63.69, 60.30, 6.67};
+// A330-200: Airbus AC A330, General Aircraft Dimensions, Dec 01/25.
+inline constexpr Dimensions a332{58.82, 60.30, 6.67};
 // Zibo B738: supplied drawing, overall length including tail extremity and span.
 // Nose-to-nose-gear is approximately 4.4 m, scaled from the drawing (not labelled).
 inline constexpr Dimensions b738{39.50, 34.40, 4.40};
@@ -35,6 +37,7 @@ inline const Dimensions* dimensions_for(std::string_view family, std::string_vie
     std::string icao(model);
     for(auto& c:icao)c=static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
     if (family == "lr") return icao == "A333" ? &a333 : nullptr;
+    if (family == "calibra") return icao == "A332" ? &a332 : nullptr;
     if (family == "zibo") return icao == "B738" ? &b738 : nullptr;
     if (family != "toliss") return nullptr;
     if (icao == "A319" || icao == "A19N") return &a319_a19n;

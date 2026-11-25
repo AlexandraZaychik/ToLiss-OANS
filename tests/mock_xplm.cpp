@@ -226,6 +226,8 @@ XPLMDataRef XPLMFindDataRef(const char* name) {
     if(fms_enabled&&n.rfind("AirbusFBW/MCDU2",0)==0)d.type=xplmType_Data;
     if(n=="AirbusFBW/ECAMFlightPhase")d.type=xplmType_Int;
     if(n=="laminar/A333/data/flight_phase")d.type=xplmType_Double;
+    if(n=="sim/cockpit2/EFIS/map_range"||n=="sim/cockpit2/EFIS/map_range_copilot")d.type=xplmType_Int;
+    if(n=="sim/cockpit2/EFIS/map_range_nm"||n=="sim/cockpit2/EFIS/map_range_nm_copilot")d.type=xplmType_Float;
     if(n=="sim/flightmodel/position/latitude")d.values[0]=30;
     if(n=="sim/flightmodel/position/longitude")d.values[0]=120.012;
     if(n=="sim/flightmodel/position/psi")d.values[0]=90;
@@ -246,12 +248,22 @@ void* XPLMFindSymbol(const char* name) {
     if(std::strcmp(name,"XPLMGetDataRefInfo")==0)return reinterpret_cast<void*>(&XPLMGetDataRefInfo);
     return nullptr;
 }
-int XPLMCanWriteDataRef(XPLMDataRef) {return 1;}
+int XPLMCanWriteDataRef(XPLMDataRef r) {
+    const auto& name=static_cast<Data*>(r)->name;
+    return name!="sim/cockpit2/EFIS/map_range_nm"&&name!="sim/cockpit2/EFIS/map_range_nm_copilot";
+}
 XPLMDataTypeID XPLMGetDataRefTypes(XPLMDataRef r) {return static_cast<Data*>(r)->type;}
 int XPLMGetDatai(XPLMDataRef r) {return static_cast<int>(static_cast<Data*>(r)->values[0]);}
 float XPLMGetDataf(XPLMDataRef r) {return static_cast<float>(static_cast<Data*>(r)->values[0]);}
 double XPLMGetDatad(XPLMDataRef r) {return static_cast<Data*>(r)->values[0];}
-void XPLMSetDatai(XPLMDataRef r,int v) {++setter_count;static_cast<Data*>(r)->values[0]=v;}
+void XPLMSetDatai(XPLMDataRef r,int v) {
+    ++setter_count;
+    auto& ref=*static_cast<Data*>(r);
+    ref.values[0]=v;
+    if(v<0||v>5)return;
+    if(ref.name=="sim/cockpit2/EFIS/map_range")MockSet("sim/cockpit2/EFIS/map_range_nm",0,10*(1<<v));
+    if(ref.name=="sim/cockpit2/EFIS/map_range_copilot")MockSet("sim/cockpit2/EFIS/map_range_nm_copilot",0,10*(1<<v));
+}
 void XPLMSetDataf(XPLMDataRef r,float v) {++setter_count;static_cast<Data*>(r)->values[0]=v;}
 void XPLMSetDatad(XPLMDataRef r,double v) {++setter_count;static_cast<Data*>(r)->values[0]=v;}
 int XPLMGetDatavi(XPLMDataRef r,int* out,int off,int count) {auto& v=static_cast<Data*>(r)->values;if(!out)return static_cast<int>(v.size());int n=std::max(0,std::min(count,static_cast<int>(v.size())-off));for(int i=0;i<n;++i)out[i]=static_cast<int>(v[i+off]);return n;}

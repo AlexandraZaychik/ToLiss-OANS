@@ -8,21 +8,23 @@
 namespace oans::lr {
 namespace {
 using aircraft::DataAccess;
-bool matches() {
+Model active_model() {
     char name[512]{},path[2048]{};XPLMGetNthAircraftModel(0,name,path);
     const auto model=std::filesystem::u8path(path);
     std::error_code error;
     const auto modified=std::filesystem::last_write_time(model,error);
-    if(error)return false;
+    if(error)return Model::other;
     // Probe on the flight loop without reparsing the ACF on every retry.
     static std::filesystem::path cached_model;
     static std::filesystem::file_time_type cached_modified{};
-    static bool cached_match=false;
+    static Model cached_identity=Model::other;
     if(model!=cached_model||modified!=cached_modified) {
-        cached_match=matches_model(model);cached_model=model;cached_modified=modified;
+        cached_identity=identify(model);cached_model=model;cached_modified=modified;
     }
-    return cached_match;
+    return cached_identity;
 }
+bool matches_laminar() {return active_model()==Model::laminar;}
+bool matches_calibra() {return active_model()==Model::calibra;}
 bool load_profile(const std::filesystem::path& directory,const std::filesystem::path&,
                   const std::string& icao,std::filesystem::path& loaded,std::string& error) {
     loaded.clear();
@@ -50,6 +52,7 @@ const aircraft::Backend& backend() {
         "lr","Laminar Research",{
             {"plan_phase","laminar/A333/data/flight_phase"},
             {"range0","sim/cockpit2/EFIS/map_range_nm"},{"range1","sim/cockpit2/EFIS/map_range_nm_copilot"},
+            {"range_selector0","sim/cockpit2/EFIS/map_range"},{"range_selector1","sim/cockpit2/EFIS/map_range_copilot"},
             {"mode0","laminar/A333/knobs/EFIS_mode_pos_capt"},{"mode1","laminar/A333/knobs/EFIS_mode_pos_fo"},
             {"bright","sim/cockpit2/switches/instrument_brightness_ratio"},
             {"nd_state0","laminar/A333/nd1/display_state"},{"nd_state1","laminar/A333/nd2/display_state"},
@@ -60,9 +63,19 @@ const aircraft::Backend& backend() {
             {"lrn0","laminar/A333/adiru1/lrn_status"},{"lrn1","laminar/A333/adiru2/lrn_status"},
             {"swap0","laminar/A333/buttons/pfd_nd_swap_capt_status"},{"swap1","laminar/A333/buttons/pfd_nd_swap_fo_status"},
             {"ecam0","laminar/A333/ECAM_on_EFIS_capt"},{"ecam1","laminar/A333/ECAM_on_EFIS_fo"}
-        },matches,display::ready,diagnostics,load_profile,make_fms,display::nd_mode,
+        },matches_laminar,display::ready,diagnostics,load_profile,make_fms,display::nd_mode,
         display::position_ready,display::powered,display::overlay_blocked,display::advisory_available,uv,display::brightness
     };
+    return value;
+}
+const aircraft::Backend& calibra_backend() {
+    static const auto value=[] {
+        auto adapter=backend();
+        adapter.id="calibra";
+        adapter.manufacturer="Calibra Simulations";
+        adapter.matches=matches_calibra;
+        return adapter;
+    }();
     return value;
 }
 }

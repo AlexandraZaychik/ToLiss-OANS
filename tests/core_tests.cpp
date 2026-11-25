@@ -74,7 +74,8 @@ int main(){try{
     auto entry=[](const char* code,double lon){IndexEntry x;x.icao=code;x.lat=0;x.lon=lon;return x;};
     const std::vector<IndexEntry> db={entry("ORIG",0),entry("DEST",2),entry("OTHER",1)};
     FmsPlan fp;fp.observed=true;fp.origin.airport="ORIG";fp.destination.airport="DEST";PlanAirportSelection selection;
-    verify(selection.select(db,fp,0,0,false)->icao=="ORIG"&&selection.select(db,fp,0,0,true)->icao=="DEST","short flight phase selects correct endpoint");
+    verify(selection.select(db,fp,0,0,plan_enroute_phase("calibra",5))->icao=="ORIG"&&
+           selection.select(db,fp,0,0,plan_enroute_phase("calibra",6))->icao=="DEST","short flight phase selects correct endpoint");
     selection.consult("DEST");verify(selection.select(db,fp,0,0,false)->icao=="DEST","crew destination preference survives automatic mode");
     selection.reset();fp.observed=false;verify(!selection.select(db,fp,0,0,true),"reset and unobserved plan cannot retain stale endpoints");
     scenario("plan/distance/300");verify(!plan_prefers_destination(false,true,300,100),"300 NM retains origin");
